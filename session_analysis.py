@@ -10,7 +10,8 @@ plt.ioff()  # Turn off interactive mode
 
 def load_data(file_path='Z:/delab/matchingpennies/matchingpennies_datatable.parquet'):
     """
-    Load the matching pennies data from a parquet file and filter out ignored entries.
+    Load the matching pennies data from a parquet file and filter out ignored entries
+    and sessions with incorrect protocols.
 
     Parameters:
     -----------
@@ -20,13 +21,16 @@ def load_data(file_path='Z:/delab/matchingpennies/matchingpennies_datatable.parq
     Returns:
     --------
     pandas.DataFrame
-        Filtered DataFrame
+        Filtered DataFrame containing only valid Matching Pennies sessions
     """
     # Load the parquet file
     df = pd.read_parquet(file_path)
 
-    # Filter out ignored entries
-    df_filtered = df[df['ignore'] == 0]
+    # Filter out ignored entries and wrong protocols
+    df_filtered = df[
+        (df['ignore'] == 0) & 
+        (df['protocol'].str.contains('MatchingPennies', na=False))
+    ]
 
     return df_filtered
 
@@ -453,3 +457,160 @@ def analyze_subject(df, subject_id, session_id, save_path=None, show_plots=True)
                 plt.close(fig)
 
     return analyses
+
+def plot_group_reward_rates(df, subject_ids):
+    """
+    Plot average reward rates across sessions for multiple subjects.
+    Each point represents the average reward rate for one session.
+    """
+    # Initialize storage for results
+    subject_data = {}
+    all_sessions = set()
+    
+    # Collect session averages for each subject
+    for subject_id in subject_ids:
+        # Get all sessions for this subject
+        subject_df = df[df['subjid'] == subject_id]
+        sessions = sorted(subject_df['sessid'].unique())  # Sort sessions
+        all_sessions.update(sessions)
+        
+        # Create sequential session numbers (1, 2, 3, etc.)
+        session_map = {sess: i+1 for i, sess in enumerate(sessions)}
+        
+        # Calculate mean reward rate for each session
+        session_means = {}
+        for session in sessions:
+            session_rewards = subject_df[subject_df['sessid'] == session]['reward']
+            session_means[session_map[session]] = np.mean(session_rewards)
+        
+        subject_data[subject_id] = session_means
+    
+    # Create figure
+    fig = plt.figure(figsize=(12, 6))
+    
+    # Plot individual subject lines
+    for subject_id, sessions in subject_data.items():
+        x = sorted(sessions.keys())  # Now these are 1, 2, 3, etc.
+        y = [sessions[s] for s in x]
+        plt.plot(x, y, 'o-', alpha=0.3, label=subject_id, markersize=4)
+    
+    # Calculate and plot mean across subjects
+    max_sessions = max(max(sessions.keys()) for sessions in subject_data.values())
+    session_numbers = range(1, max_sessions + 1)
+    mean_rewards = []
+    sem_rewards = []
+    
+    for session_num in session_numbers:
+        session_rewards = [subject_data[s].get(session_num) 
+                         for s in subject_data.keys()]
+        session_rewards = [r for r in session_rewards if r is not None]
+        
+        if session_rewards:
+            mean_rewards.append(np.mean(session_rewards))
+            sem_rewards.append(np.std(session_rewards) / np.sqrt(len(session_rewards)))
+    
+    # Plot mean ± SEM
+    plt.plot(session_numbers, mean_rewards, 'k-', linewidth=2, label='Group Mean')
+    plt.fill_between(session_numbers, 
+                    np.array(mean_rewards) - np.array(sem_rewards),
+                    np.array(mean_rewards) + np.array(sem_rewards),
+                    color='k', alpha=0.2)
+    
+    # Add reference line at 0.5
+    plt.axhline(y=0.5, color='k', linestyle='-', alpha=0.5)
+    
+    # Formatting
+    plt.xlabel('Session Number')
+    plt.ylabel('Mean Reward Rate')
+    plt.title('Group Reward Rates Across Sessions')
+    plt.grid(True, alpha=0.3)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    
+    return fig
+
+def plot_group_confidence(df, subject_ids):
+    """
+    Plot average computer confidence across sessions for multiple subjects.
+    Each point represents the average confidence for one session.
+    """
+    # Initialize storage for results
+    subject_data = {}
+    all_sessions = set()
+    min_p_value = 1e-12  # Cap very small p-values
+    
+    # Collect session averages for each subject
+    for subject_id in subject_ids:
+        # Get all sessions for this subject
+        subject_df = df[df['subjid'] == subject_id]
+        sessions = sorted(subject_df['sessid'].unique())  # Sort sessions
+        all_sessions.update(sessions)
+        
+        # Create sequential session numbers (1, 2, 3, etc.)
+        session_map = {sess: i+1 for i, sess in enumerate(sessions)}
+        
+        # Calculate mean confidence for each session
+        session_means = {}
+        for session in sessions:
+            p_values = subject_df[subject_df['sessid'] == session]['min_pvalue']
+            p_values = np.maximum(p_values, min_p_value)
+            confidence = -np.log10(p_values)
+            session_means[session_map[session]] = np.mean(confidence)
+        
+        subject_data[subject_id] = session_means
+    
+    # Create figure
+    fig = plt.figure(figsize=(12, 6))
+    
+    # Plot individual subject lines
+    for subject_id, sessions in subject_data.items():
+        x = sorted(sessions.keys())  # Now these are 1, 2, 3, etc.
+        y = [sessions[s] for s in x]
+        plt.plot(x, y, 'o-', alpha=0.3, label=subject_id, markersize=4)
+    
+    # Calculate and plot mean across subjects
+    max_sessions = max(max(sessions.keys()) for sessions in subject_data.values())
+    session_numbers = list(range(1, max_sessions + 1))  # Convert to list for indexing
+    mean_conf = np.zeros(len(session_numbers))  # Initialize with zeros
+    sem_conf = np.zeros(len(session_numbers))   # Initialize with zeros
+    
+    # Calculate mean and SEM for each session
+    for i, session_num in enumerate(session_numbers):
+        session_conf = [subject_data[s].get(session_num) 
+                       for s in subject_data.keys()]
+        valid_conf = [c for c in session_conf if c is not None]
+        
+        if valid_conf:  # If we have any valid data for this session
+            mean_conf[i] = np.mean(valid_conf)
+            sem_conf[i] = np.std(valid_conf) / np.sqrt(len(valid_conf))
+        else:  # If no data for this session, use previous value
+            mean_conf[i] = mean_conf[i-1] if i > 0 else np.nan
+            sem_conf[i] = sem_conf[i-1] if i > 0 else np.nan
+    
+    # Remove any trailing NaN values
+    valid_indices = ~np.isnan(mean_conf)
+    session_numbers = np.array(session_numbers)[valid_indices]
+    mean_conf = mean_conf[valid_indices]
+    sem_conf = sem_conf[valid_indices]
+    
+    # Plot mean ± SEM
+    plt.plot(session_numbers, mean_conf, 'k-', linewidth=2, label='Group Mean')
+    plt.fill_between(session_numbers,
+                    mean_conf - sem_conf,
+                    mean_conf + sem_conf,
+                    color='k', alpha=0.2)
+    
+    # Add significance level line
+    significance_level = -np.log10(0.05)
+    plt.axhline(y=significance_level, color='r', linestyle='--', 
+                alpha=0.5, label='p=0.05')
+
+    # Formatting
+    plt.xlabel('Session Number')
+    plt.ylabel('Computer Confidence (-log10(p))')
+    plt.title('Group Computer Confidence Across Sessions')
+    plt.grid(True, alpha=0.3)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+
+    return fig

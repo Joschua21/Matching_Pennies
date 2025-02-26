@@ -23,8 +23,13 @@ post_cue_samples = int(post_cue_time * sampling_rate)
 total_window_samples = pre_cue_samples + post_cue_samples
 
 PARQUET_PATH = r"Z:\delab\matchingpennies\matchingpennies_datatable.parquet"
-CODE_VERSION = "1.0.2"  # Increment this when making analysis changes
+CODE_VERSION = "1.0.3"  # Increment this when making analysis changes
 
+def calculate_sem(data, axis=0):
+    """Calculate Standard Error of Mean (SEM)"""
+    std = np.std(data, axis=axis)
+    n = data.shape[axis]
+    return std / np.sqrt(n)
 
 def ensure_directory_exists(directory):
     if not os.path.exists(directory):
@@ -131,8 +136,7 @@ def process_session(subject_id, session_date, force_recompute=False):
     """Process a single session for a given subject"""
 
     if not force_recompute:
-        # Change this line - the variable name conflicts with the function name
-        saved_result = check_saved_results(subject_id, session_date)  # Changed from save_results to saved_result
+        saved_result = check_saved_results(subject_id, session_date)  
         if saved_result is not None:
             return saved_result
 
@@ -204,7 +208,7 @@ def process_session(subject_id, session_date, force_recompute=False):
         # Calculate statistics
         time_axis = np.linspace(-pre_cue_time, post_cue_time, total_window_samples, endpoint=False)
         trial_average = np.mean(plotting_data, axis=0)
-        trial_std = np.std(plotting_data, axis=0)
+        trial_sem = calculate_sem(plotting_data, axis=0)
 
         reward_outcomes = np.array(behavior_data["reward"])[valid_trials]
         choices = np.array(behavior_data["choice"])[valid_trials]
@@ -216,7 +220,7 @@ def process_session(subject_id, session_date, force_recompute=False):
             'epoched_data': all_epoched_data,
             'time_axis': time_axis,
             'trial_average': trial_average,
-            'trial_std': trial_std,
+            'trial_sem': trial_sem,
             'valid_trials': valid_trials,
             'non_m_trials': non_m_trials,
             'num_trials': num_trials,
@@ -261,25 +265,26 @@ def plot_session_results(analysis_result, show_heatmap=False, win_loss=False, sa
         # Plot rewarded trials
         if len(rewarded_trials) > 0:
             rewarded_avg = np.mean(rewarded_trials, axis=0)
-            rewarded_std = np.std(rewarded_trials, axis=0)
-            ax1.fill_between(analysis_result['time_axis'], rewarded_avg - rewarded_std,
-                             rewarded_avg + rewarded_std, color='lightgreen', alpha=0.4, label='Rewarded ± SD')
+            rewarded_sem = calculate_sem(rewarded_trials, axis=0)
+            ax1.fill_between(analysis_result['time_axis'], rewarded_avg - rewarded_sem,
+                             rewarded_avg + rewarded_sem, color='lightgreen', alpha=0.4, label='Rewarded ± SEM')
             ax1.plot(analysis_result['time_axis'], rewarded_avg, color='green', linewidth=2.5, label='Rewarded Avg')
 
         # Plot unrewarded trials
         if len(unrewarded_trials) > 0:
             unrewarded_avg = np.mean(unrewarded_trials, axis=0)
-            unrewarded_std = np.std(unrewarded_trials, axis=0)
-            ax1.fill_between(analysis_result['time_axis'], unrewarded_avg - unrewarded_std,
-                             unrewarded_avg + unrewarded_std, color='lightsalmon', alpha=0.4, label='Unrewarded ± SD')
+            unrewarded_sem = calculate_sem(unrewarded_trials, axis=0)
+            ax1.fill_between(analysis_result['time_axis'], unrewarded_avg - unrewarded_sem,
+                             unrewarded_avg + unrewarded_sem, color='lightsalmon', alpha=0.4, label='Unrewarded ± SEM')
             ax1.plot(analysis_result['time_axis'], unrewarded_avg, color='darkorange', linewidth=2.5,
                      label='Unrewarded Avg')
 
     else:  # Default behavior
+        trial_sem = calculate_sem(analysis_result['plotting_data'], axis=0)
         ax1.fill_between(analysis_result['time_axis'],
-                         analysis_result['trial_average'] - analysis_result['trial_std'],
-                         analysis_result['trial_average'] + analysis_result['trial_std'],
-                         color='lightgreen', alpha=0.4, label='Mean ± SD')
+                         analysis_result['trial_average'] - trial_sem,
+                         analysis_result['trial_average'] + trial_sem,
+                         color='lightgreen', alpha=0.4, label='Mean ± SEM')
 
         ax1.plot(analysis_result['time_axis'], analysis_result['trial_average'],
                  color='darkgreen', linewidth=2.5, label='Trial Average')
@@ -384,28 +389,32 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
             if win_loss:
                 # Rewarded data
                 if saved_results.get('rewarded_avg') is not None:
+                    rewarded_avg = saved_results['rewarded_avg']
+                    rewarded_sem = saved_results['rewarded_sem']
                     plt.fill_between(saved_results['time_axis'],
-                                     saved_results['rewarded_avg'] - saved_results['rewarded_std'],
-                                     saved_results['rewarded_avg'] + saved_results['rewarded_std'],
-                                     color='lightgreen', alpha=0.4, label='Rewarded ± SD')
-                    plt.plot(saved_results['time_axis'], saved_results['rewarded_avg'],
-                             color='green', linewidth=2.5, label='Rewarded Avg')
+                                    rewarded_avg - rewarded_sem,
+                                    rewarded_avg + rewarded_sem,
+                                    color='lightgreen', alpha=0.4, label='Rewarded ± SEM')
+                    plt.plot(saved_results['time_axis'], rewarded_avg,
+                            color='green', linewidth=2.5, label='Rewarded Avg')
 
                 # Unrewarded data
                 if saved_results.get('unrewarded_avg') is not None:
+                    unrewarded_avg = saved_results['unrewarded_avg']
+                    unrewarded_sem = saved_results['unrewarded_sem']
                     plt.fill_between(saved_results['time_axis'],
-                                     saved_results['unrewarded_avg'] - saved_results['unrewarded_std'],
-                                     saved_results['unrewarded_avg'] + saved_results['unrewarded_std'],
-                                     color='lightsalmon', alpha=0.4, label='Unrewarded ± SD')
-                    plt.plot(saved_results['time_axis'], saved_results['unrewarded_avg'],
-                             color='darkorange', linewidth=2.5, label='Unrewarded Avg')
+                                    unrewarded_avg - unrewarded_sem,
+                                    unrewarded_avg + unrewarded_sem,
+                                    color='lightsalmon', alpha=0.4, label='Unrewarded ± SEM')
+                    plt.plot(saved_results['time_axis'], unrewarded_avg,
+                            color='darkorange', linewidth=2.5, label='Unrewarded Avg')
             else:
+                pooled_sem = saved_results['pooled_sem']
                 plt.fill_between(saved_results['time_axis'],
-                                 saved_results['pooled_average'] - saved_results['pooled_std'],
-                                 saved_results['pooled_average'] + saved_results['pooled_std'],
-                                 color='lightgreen', alpha=0.4, label='Mean ± SD')
-                plt.plot(saved_results['time_axis'], saved_results['pooled_average'],
-                         color='darkgreen', linewidth=2.5, label='Pooled Average')
+                                 saved_results['pooled_average'] - pooled_sem,  
+                                 saved_results['pooled_average'] + pooled_sem,  
+                                 color='lightgreen', alpha=0.4,
+                                 label='Mean ± SEM')  
 
                 # Plot session averages
             for i, session_avg in enumerate(saved_results.get('session_averages', [])):
@@ -479,16 +488,13 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
     # Concatenate all trials from all sessions
     pooled_data = np.vstack(all_plotting_data)
     pooled_average = np.mean(pooled_data, axis=0)
-    pooled_std = np.std(pooled_data, axis=0)
-    time_axis = all_sessions[0]['time_axis']  # Time axis should be the same for all sessions
+    time_axis = all_sessions[0]['time_axis']  
 
     # Create the pooled plot
     plt.figure(figsize=(12, 7))
 
     rewarded_avg = None
-    rewarded_std = None
     unrewarded_avg = None
-    unrewarded_std = None
 
     if win_loss:
         rewarded_data = []
@@ -517,29 +523,29 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
         # Compute averages and std deviations
         if rewarded_data.size > 0:
             rewarded_avg = np.mean(rewarded_data, axis=0)
-            rewarded_std = np.std(rewarded_data, axis=0)
-            plt.fill_between(time_axis, rewarded_avg - rewarded_std, rewarded_avg + rewarded_std,
-                             color='lightgreen', alpha=0.4, label='Rewarded ± SD')
+            rewarded_sem = calculate_sem(rewarded_data, axis=0)  
+            plt.fill_between(time_axis, 
+                             rewarded_avg - rewarded_sem,  
+                             rewarded_avg + rewarded_sem,  
+                             color='lightgreen', alpha=0.4, label='Rewarded ± SEM')  
             plt.plot(time_axis, rewarded_avg, color='green', linewidth=2.5, label='Rewarded Avg')
 
         if unrewarded_data.size > 0:
             unrewarded_avg = np.mean(unrewarded_data, axis=0)
-            unrewarded_std = np.std(unrewarded_data, axis=0)
-            plt.fill_between(time_axis, unrewarded_avg - unrewarded_std, unrewarded_avg + unrewarded_std,
-                             color='lightsalmon', alpha=0.4, label='Unrewarded ± SD')
+            unrewarded_sem = calculate_sem(unrewarded_data, axis=0) 
+            plt.fill_between(time_axis, 
+                             unrewarded_avg - unrewarded_sem,  
+                             unrewarded_avg + unrewarded_sem,  
+                             color='lightsalmon', alpha=0.4, label='Unrewarded ± SEM')  
             plt.plot(time_axis, unrewarded_avg, color='darkorange', linewidth=2.5, label='Unrewarded Avg')
 
     else:
+        pooled_sem = calculate_sem(pooled_data, axis=0)  
         plt.fill_between(time_axis,
-                         pooled_average - pooled_std,
-                         pooled_average + pooled_std,
+                         pooled_average - pooled_sem,  
+                         pooled_average + pooled_sem,  
                          color='lightgreen', alpha=0.4,
-                         label='Mean ± SD')
-
-        # Plot pooled trial average
-        plt.plot(time_axis, pooled_average,
-                 color='darkgreen', linewidth=2.5,
-                 label='Pooled Average')
+                         label='Mean ± SEM')  
 
     # Plot individual session averages as thin lines
     for i, session in enumerate(all_sessions):
@@ -560,7 +566,7 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
     # Limit legend items if too many sessions
     if len(all_sessions) > 5:
         handles, labels = plt.gca().get_legend_handles_labels()
-        limited_handles = handles[:8]  # First few items + Mean/SD, Pooled Avg, Cue Onset
+        limited_handles = handles[:8]
         limited_labels = labels[:8]
         limited_labels.append(f"+ {len(all_sessions) - 5} more sessions")
         plt.legend(limited_handles, limited_labels, loc='upper right', fontsize=10)
@@ -580,18 +586,19 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
 
     # Prepare pooled result
     pooled_result = {
+        'code_version': CODE_VERSION,
         'subject_id': subject_id,
         'session_dates': session_dates,
         'pooled_data': pooled_data,
         'pooled_average': pooled_average,
-        'pooled_std': pooled_std,
+        'pooled_sem': calculate_sem(pooled_data, axis=0),  
         'time_axis': time_axis,
         'total_trials': total_trials,
         'session_averages': session_averages,
         'rewarded_avg': rewarded_avg,
-        'rewarded_std': rewarded_std,
+        'rewarded_sem': calculate_sem(rewarded_data, axis=0) if rewarded_data.size > 0 else None, 
         'unrewarded_avg': unrewarded_avg,
-        'unrewarded_std': unrewarded_std
+        'unrewarded_sem': calculate_sem(unrewarded_data, axis=0) if unrewarded_data.size > 0 else None 
     }
 
     # Save pooled results
@@ -662,6 +669,10 @@ def select_and_visualize(show_heatmap=False, win_loss=False, force_recompute=Fal
         print("Please enter a valid number")
         return
 
+    # Ask for win/loss analysis preference
+    win_loss_input = input("Show win/loss analysis? (y/n): ").lower()
+    win_loss = win_loss_input.startswith('y')
+
     # Get sessions for this subject
     subject_dir = os.path.join(base_dir, selected_subject)
     sessions = [d for d in os.listdir(subject_dir)
@@ -686,13 +697,13 @@ def select_and_visualize(show_heatmap=False, win_loss=False, force_recompute=Fal
 
         if sess_idx == len(sessions):  # Pooled analysis selected
             print(f"\nGenerating pooled analysis for {selected_subject}...")
-            analyze_pooled_data(selected_subject)
+            analyze_pooled_data(selected_subject, win_loss=win_loss)
         else:  # Single session selected
             selected_session = sessions[sess_idx]
             print(f"\nAnalyzing session {selected_subject}/{selected_session}...")
             result = process_session(selected_subject, selected_session)
             if result:
-                plot_session_results(result, show_heatmap=show_heatmap)
+                plot_session_results(result, show_heatmap=show_heatmap, win_loss=win_loss)
             else:
                 print("Failed to process session")
 
