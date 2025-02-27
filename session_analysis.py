@@ -6,7 +6,6 @@ from pathlib import Path
 # Global constants
 DEFAULT_WINDOW_SIZE = 25  # Default window size for moving averages
 
-plt.ioff()  # Turn off interactive mode
 
 def load_data(file_path='Z:/delab/matchingpennies/matchingpennies_datatable.parquet'):
     """
@@ -341,6 +340,7 @@ def plot_computer_confidence(df, subject_id, session_id):
 def analyze_patterns(df, subject_id, session_id):
     """
     Analyze and plot the frequency of 3-choice patterns for a specific subject and session.
+    Handles cases where not all patterns may be present.
 
     Parameters:
     -----------
@@ -356,7 +356,7 @@ def analyze_patterns(df, subject_id, session_id):
 
     if subject_data.empty:
         print(f"No data found for subject {subject_id} and session {session_id}")
-        return
+        return None
 
     # Extract choices, filtering out 'M'
     all_choices = subject_data['choice'].values
@@ -364,7 +364,7 @@ def analyze_patterns(df, subject_id, session_id):
 
     if len(choices) < 3:
         print(f"Not enough valid choices (need at least 3) for subject {subject_id} and session {session_id}")
-        return
+        return None
 
     # Initialize pattern dictionary for all possible 3-choice patterns
     patterns = {
@@ -377,6 +377,11 @@ def analyze_patterns(df, subject_id, session_id):
         pattern = choices[i] + choices[i + 1] + choices[i + 2]
         if pattern in patterns:
             patterns[pattern] += 1
+
+    # Check if we have any patterns at all
+    if sum(patterns.values()) == 0:
+        print(f"No valid patterns found for subject {subject_id} and session {session_id}")
+        return None
 
     # Calculate cumulative frequencies
     pattern_counts = {k: 0 for k in patterns.keys()}
@@ -396,8 +401,16 @@ def analyze_patterns(df, subject_id, session_id):
     fig = plt.figure(figsize=(12, 8))
 
     # Plot cumulative frequencies for each pattern
+    color_map = {
+        'LLL': 'red', 'LLR': 'salmon', 'LRL': 'darkred', 'LRR': 'lightcoral',
+        'RLL': 'blue', 'RLR': 'royalblue', 'RRL': 'darkblue', 'RRR': 'lightblue'
+    }
+
+    # Only plot patterns that actually occur
     for pattern, counts in cumulative_counts.items():
-        plt.plot(x_values, counts, label=pattern)
+        if max(counts) > 0:  # Only plot if there are occurrences
+            plt.plot(x_values, counts, label=f"{pattern} (n={max(counts)})",
+                     color=color_map.get(pattern), linewidth=2)
 
     # Set the y-axis and labels
     plt.ylabel('Cumulative Frequency')
@@ -406,11 +419,14 @@ def analyze_patterns(df, subject_id, session_id):
     plt.xlabel('Trial Number')
     plt.title(f'Cumulative Pattern Frequencies for Subject {subject_id}, Session {session_id}')
     plt.grid(True, alpha=0.3)
-    plt.legend()
+
+    # Only add legend if there are patterns to show
+    if any(max(counts) > 0 for counts in cumulative_counts.values()):
+        plt.legend()
+
     plt.tight_layout()
 
     return fig
-
 
 def analyze_subject(df, subject_id, session_id, save_path=None, show_plots=True):
     """
@@ -529,6 +545,7 @@ def plot_group_reward_rates(df, subject_ids):
     
     return fig
 
+
 def plot_group_confidence(df, subject_ids):
     """
     Plot average computer confidence across sessions for multiple subjects.
@@ -538,17 +555,17 @@ def plot_group_confidence(df, subject_ids):
     subject_data = {}
     all_sessions = set()
     min_p_value = 1e-12  # Cap very small p-values
-    
+
     # Collect session averages for each subject
     for subject_id in subject_ids:
         # Get all sessions for this subject
         subject_df = df[df['subjid'] == subject_id]
         sessions = sorted(subject_df['sessid'].unique())  # Sort sessions
         all_sessions.update(sessions)
-        
+
         # Create sequential session numbers (1, 2, 3, etc.)
-        session_map = {sess: i+1 for i, sess in enumerate(sessions)}
-        
+        session_map = {sess: i + 1 for i, sess in enumerate(sessions)}
+
         # Calculate mean confidence for each session
         session_means = {}
         for session in sessions:
@@ -556,53 +573,48 @@ def plot_group_confidence(df, subject_ids):
             p_values = np.maximum(p_values, min_p_value)
             confidence = -np.log10(p_values)
             session_means[session_map[session]] = np.mean(confidence)
-        
+
         subject_data[subject_id] = session_means
-    
+
     # Create figure
     fig = plt.figure(figsize=(12, 6))
-    
+
     # Plot individual subject lines
     for subject_id, sessions in subject_data.items():
-        x = sorted(sessions.keys())  # Now these are 1, 2, 3, etc.
+        x = sorted(sessions.keys())
         y = [sessions[s] for s in x]
         plt.plot(x, y, 'o-', alpha=0.3, label=subject_id, markersize=4)
-    
+
     # Calculate and plot mean across subjects
     max_sessions = max(max(sessions.keys()) for sessions in subject_data.values())
-    session_numbers = list(range(1, max_sessions + 1))  # Convert to list for indexing
-    mean_conf = np.zeros(len(session_numbers))  # Initialize with zeros
-    sem_conf = np.zeros(len(session_numbers))   # Initialize with zeros
-    
+    session_numbers = list(range(1, max_sessions + 1))
+
+    # Create lists to store data for each session
+    means = []
+    sems = []
+    valid_sessions = []
+
     # Calculate mean and SEM for each session
-    for i, session_num in enumerate(session_numbers):
-        session_conf = [subject_data[s].get(session_num) 
-                       for s in subject_data.keys()]
+    for session_num in session_numbers:
+        session_conf = [subject_data[s].get(session_num) for s in subject_data.keys()]
         valid_conf = [c for c in session_conf if c is not None]
-        
-        if valid_conf:  # If we have any valid data for this session
-            mean_conf[i] = np.mean(valid_conf)
-            sem_conf[i] = np.std(valid_conf) / np.sqrt(len(valid_conf))
-        else:  # If no data for this session, use previous value
-            mean_conf[i] = mean_conf[i-1] if i > 0 else np.nan
-            sem_conf[i] = sem_conf[i-1] if i > 0 else np.nan
-    
-    # Remove any trailing NaN values
-    valid_indices = ~np.isnan(mean_conf)
-    session_numbers = np.array(session_numbers)[valid_indices]
-    mean_conf = mean_conf[valid_indices]
-    sem_conf = sem_conf[valid_indices]
-    
-    # Plot mean ± SEM
-    plt.plot(session_numbers, mean_conf, 'k-', linewidth=2, label='Group Mean')
-    plt.fill_between(session_numbers,
-                    mean_conf - sem_conf,
-                    mean_conf + sem_conf,
-                    color='k', alpha=0.2)
-    
+
+        if valid_conf and len(valid_conf) > 0:  # If we have any valid data for this session
+            means.append(np.mean(valid_conf))
+            sems.append(np.std(valid_conf) / np.sqrt(len(valid_conf)))
+            valid_sessions.append(session_num)
+
+    # Plot mean ± SEM only for sessions with data
+    if valid_sessions:
+        plt.plot(valid_sessions, means, 'k-', linewidth=2, label='Group Mean')
+        plt.fill_between(valid_sessions,
+                         np.array(means) - np.array(sems),
+                         np.array(means) + np.array(sems),
+                         color='k', alpha=0.2)
+
     # Add significance level line
     significance_level = -np.log10(0.05)
-    plt.axhline(y=significance_level, color='r', linestyle='--', 
+    plt.axhline(y=significance_level, color='r', linestyle='--',
                 alpha=0.5, label='p=0.05')
 
     # Formatting
