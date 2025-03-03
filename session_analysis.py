@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
+import math
 
 # Global constants
 DEFAULT_WINDOW_SIZE = 25  # Default window size for moving averages
@@ -27,7 +28,7 @@ def load_data(file_path='Z:/delab/matchingpennies/matchingpennies_datatable.parq
 
     # Filter out ignored entries and wrong protocols
     df_filtered = df[
-        (df['ignore'] == 0) & 
+        (df['ignore'] == 0) &
         (df['protocol'].str.contains('MatchingPennies', na=False))
     ]
 
@@ -188,11 +189,11 @@ def plot_prob_left(df, subject_id, session_id, use_window_size=False):
     # Calculate moving average with weighted initialization
     left_probs = []
     all_probs = np.full(len(choices), np.nan)  # Initialize all trials with NaN
-    
+
     for i in range(len(choices)):
         if choices[i] == 'M':
             continue  # Skip missed trials
-            
+
         if i < window_size:
             # For early trials, use a mix of actual data and overall average
             available_data = binary_choices[:i + 1]
@@ -208,17 +209,17 @@ def plot_prob_left(df, subject_id, session_id, use_window_size=False):
             if len(valid_window) > 0:
                 prob = np.mean(valid_window)
                 all_probs[i] = prob
-    
+
     # Create the figure and plot
     fig = plt.figure(figsize=(12, 6))
-    
+
     # Plot with gaps (NaN values will create gaps in the line)
     trials = np.arange(1, len(choices) + 1)
     plt.plot(trials, all_probs, 'b-', linewidth=2, label='Left Choice Probability')
-    
+
     # Add a horizontal line at 0.5 (random chance)
     plt.axhline(y=0.5, color='r', linestyle='--', alpha=0.5, label='Random (0.5)')
-    
+
     # Set the y-axis limits and labels
     plt.ylim(0, 1)
     plt.ylabel('Probability of Left')
@@ -379,9 +380,18 @@ def analyze_patterns(df, subject_id, session_id):
             patterns[pattern] += 1
 
     # Check if we have any patterns at all
-    if sum(patterns.values()) == 0:
+    total_patterns = sum(patterns.values())
+    if total_patterns == 0:
         print(f"No valid patterns found for subject {subject_id} and session {session_id}")
         return None
+
+    entropy = 0
+    for pattern, count in patterns.items():
+        if count > 0:
+            p_k = count / total_patterns
+            entropy -= p_k * math.log2(p_k)
+
+    print(f"Entropy for subject {subject_id}, session {session_id}: {entropy:.4f} bits (max: 3 bits)")
 
     # Calculate cumulative frequencies
     pattern_counts = {k: 0 for k in patterns.keys()}
@@ -417,12 +427,24 @@ def analyze_patterns(df, subject_id, session_id):
 
     # Set the x-axis and title
     plt.xlabel('Trial Number')
-    plt.title(f'Cumulative Pattern Frequencies for Subject {subject_id}, Session {session_id}')
+    plt.title(f'Cumulative Pattern Frequencies for Subject {subject_id}, Session {session_id}\nEntropy: {entropy}')
     plt.grid(True, alpha=0.3)
 
     # Only add legend if there are patterns to show
     if any(max(counts) > 0 for counts in cumulative_counts.values()):
         plt.legend()
+
+    text_str = '\n'.join([
+        f'Pattern frequencies:',
+        *[f'{p}: {count}/{total_patterns} ({count / total_patterns:.2%})' for p, count in patterns.items() if
+          count > 0],
+        f'Entropy: {entropy:.4f} bits',
+        f'Normalized entropy: {entropy / 3:.4%} of maximum'
+    ])
+
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+    plt.text(0.05, 0.95, text_str, transform=plt.gca().transAxes, fontsize=9,
+             verticalalignment='top', bbox=props)
 
     plt.tight_layout()
 
@@ -482,59 +504,59 @@ def plot_group_reward_rates(df, subject_ids):
     # Initialize storage for results
     subject_data = {}
     all_sessions = set()
-    
+
     # Collect session averages for each subject
     for subject_id in subject_ids:
         # Get all sessions for this subject
         subject_df = df[df['subjid'] == subject_id]
         sessions = sorted(subject_df['sessid'].unique())  # Sort sessions
         all_sessions.update(sessions)
-        
+
         # Create sequential session numbers (1, 2, 3, etc.)
         session_map = {sess: i+1 for i, sess in enumerate(sessions)}
-        
+
         # Calculate mean reward rate for each session
         session_means = {}
         for session in sessions:
             session_rewards = subject_df[subject_df['sessid'] == session]['reward']
             session_means[session_map[session]] = np.mean(session_rewards)
-        
+
         subject_data[subject_id] = session_means
-    
+
     # Create figure
     fig = plt.figure(figsize=(12, 6))
-    
+
     # Plot individual subject lines
     for subject_id, sessions in subject_data.items():
         x = sorted(sessions.keys())  # Now these are 1, 2, 3, etc.
         y = [sessions[s] for s in x]
         plt.plot(x, y, 'o-', alpha=0.3, label=subject_id, markersize=4)
-    
+
     # Calculate and plot mean across subjects
     max_sessions = max(max(sessions.keys()) for sessions in subject_data.values())
     session_numbers = range(1, max_sessions + 1)
     mean_rewards = []
     sem_rewards = []
-    
+
     for session_num in session_numbers:
-        session_rewards = [subject_data[s].get(session_num) 
+        session_rewards = [subject_data[s].get(session_num)
                          for s in subject_data.keys()]
         session_rewards = [r for r in session_rewards if r is not None]
-        
+
         if session_rewards:
             mean_rewards.append(np.mean(session_rewards))
             sem_rewards.append(np.std(session_rewards) / np.sqrt(len(session_rewards)))
-    
+
     # Plot mean ± SEM
     plt.plot(session_numbers, mean_rewards, 'k-', linewidth=2, label='Group Mean')
-    plt.fill_between(session_numbers, 
+    plt.fill_between(session_numbers,
                     np.array(mean_rewards) - np.array(sem_rewards),
                     np.array(mean_rewards) + np.array(sem_rewards),
                     color='k', alpha=0.2)
-    
+
     # Add reference line at 0.5
     plt.axhline(y=0.5, color='k', linestyle='-', alpha=0.5)
-    
+
     # Formatting
     plt.xlabel('Session Number')
     plt.ylabel('Mean Reward Rate')
@@ -542,7 +564,7 @@ def plot_group_reward_rates(df, subject_ids):
     plt.grid(True, alpha=0.3)
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
-    
+
     return fig
 
 
