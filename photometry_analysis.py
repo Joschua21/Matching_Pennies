@@ -289,7 +289,7 @@ def plot_session_results(analysis_result, show_heatmap=False, win_loss=False, sa
         ax1.plot(analysis_result['time_axis'], analysis_result['trial_average'],
                  color='darkgreen', linewidth=2.5, label='Trial Average')
 
-    ax1.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Cue Onset')
+    ax1.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     ax1.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
 
     ax1.set_xlabel('Time (s)', fontsize=12)
@@ -426,7 +426,7 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
                          color=blue_colors[idx],
                          label=f"Session {saved_results['session_dates'][idx]}" if idx < 5 else "_nolegend_")
 
-            plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Cue Onset')
+            plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
             plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
 
             plt.xlabel('Time (s)', fontsize=12)
@@ -567,7 +567,7 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
                  label=f"Session {session_date}")
 
         # Add a vertical line at the cue onset (time=0)
-    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Cue Onset')
+    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
 
     # Labels and formatting
@@ -876,7 +876,7 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False)
                         color=colors[quartile], linewidth=2,
                         label=f'Quartile {quartile + 1}')
 
-    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Cue Onset')
+    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
     plt.xlabel('Time (s)', fontsize=12)
     plt.ylabel('ΔF/F', fontsize=12)
@@ -895,6 +895,212 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False)
     return {
         'quartile_bins': quartile_bins,
         'reward_rates': reward_rates
+    }
+
+
+def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=False):
+    """
+    Analyze photometry signals binned by computer confidence quartiles for a single session or pooled across sessions
+
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    session_date : str, optional
+        Specific session to analyze. If None, analyze all sessions.
+    win_loss : bool, optional
+        Whether to split by rewarded/unrewarded trials
+
+    Returns:
+    --------
+    dict: Analysis results including quartile bins and confidence values
+    """
+    all_plotting_data = []
+    all_confidences = []
+    all_reward_outcomes = []
+    time_axis = None
+    plot_title = ''
+
+    if session_date is None:
+        # Get all sessions for pooled analysis
+        subject_path = os.path.join(base_dir, subject_id)
+        sessions = sorted([d for d in os.listdir(subject_path)
+                           if os.path.isdir(os.path.join(subject_path, d)) and
+                           os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+
+        # Process each session separately to maintain session-specific confidence context
+        for sess_date in sessions:
+            session_result = process_session(subject_id, sess_date)
+            if not session_result:
+                continue
+
+            # Get behavioral data for this session
+            behavior_data = session_result['behavioral_data']
+
+            # Load the parquet file to get min_pvalue data
+            try:
+                df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+                df['date'] = df['date'].astype(str)  # Ensure date is a string
+                session_data = df[(df['subjid'] == subject_id) & (df['date'] == sess_date) & (df["ignore"] == 0)]
+
+                if session_data.empty:
+                    print(f"No p-value data found for {subject_id} on {sess_date}")
+                    continue
+
+                # Extract p-values and calculate confidence
+                p_values = session_data['min_pvalue'].values
+                min_p_value = 1e-12
+                p_values = np.maximum(p_values, min_p_value)
+                confidence = -np.log10(p_values)
+
+                # Calculate moving average confidence with window size 15
+                window_size = 15
+                confidence_rates = []
+                overall_confidence = np.mean(confidence)
+
+                for i in range(len(confidence)):
+                    if i < window_size:
+                        available_data = confidence[:i + 1]
+                        missing_data_weight = (window_size - len(available_data)) / window_size
+                        rate = (np.sum(
+                            available_data) + missing_data_weight * window_size * overall_confidence) / window_size
+                    else:
+                        rate = np.mean(confidence[i - window_size + 1:i + 1])
+                    confidence_rates.append(rate)
+
+                # Get valid trials
+                non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
+                                          if idx in session_result["non_m_trials"]])
+
+                # Store data and corresponding confidence rates
+                all_plotting_data.append(session_result['plotting_data'])
+                all_confidences.extend(np.array(confidence_rates)[non_m_indices])
+                all_reward_outcomes.append(session_result["reward_outcomes"][non_m_indices])
+                time_axis = session_result['time_axis']
+
+            except Exception as e:
+                print(f"Error processing p-values for {subject_id}/{sess_date}: {e}")
+                continue
+
+        plot_title = f'Pooled Photometry by Computer Confidence Quartiles: {subject_id}'
+        plotting_data = np.vstack(all_plotting_data)
+        confidence_rates = np.array(all_confidences)
+        reward_outcomes = np.concatenate(all_reward_outcomes)
+
+    else:
+        # Single session analysis
+        session_result = process_session(subject_id, session_date)
+        if not session_result:
+            print(f"Could not process session {subject_id}/{session_date}")
+            return None
+
+        # Load the parquet file to get min_pvalue data
+        try:
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)  # Ensure date is a string
+            session_data = df[(df['subjid'] == subject_id) & (df['date'] == session_date) & (df["ignore"] == 0)]
+
+            if session_data.empty:
+                print(f"No p-value data found for {subject_id} on {session_date}")
+                return None
+
+            # Extract p-values and calculate confidence
+            p_values = session_data['min_pvalue'].values
+            min_p_value = 1e-12
+            p_values = np.maximum(p_values, min_p_value)
+            confidence = -np.log10(p_values)
+
+            # Calculate moving average confidence with window size 15
+            window_size = 15
+            confidence_rates = []
+            overall_confidence = np.mean(confidence)
+
+            for i in range(len(confidence)):
+                if i < window_size:
+                    available_data = confidence[:i + 1]
+                    missing_data_weight = (window_size - len(available_data)) / window_size
+                    rate = (np.sum(
+                        available_data) + missing_data_weight * window_size * overall_confidence) / window_size
+                else:
+                    rate = np.mean(confidence[i - window_size + 1:i + 1])
+                confidence_rates.append(rate)
+
+            non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
+                                      if idx in session_result["non_m_trials"]])
+
+            plotting_data = session_result['plotting_data']
+            confidence_rates = np.array(confidence_rates)[non_m_indices]
+            reward_outcomes = session_result["reward_outcomes"][non_m_indices]
+            time_axis = session_result['time_axis']
+            plot_title = f'Photometry by Computer Confidence Quartiles: {subject_id} - {session_date}'
+
+        except Exception as e:
+            print(f"Error processing p-values for {subject_id}/{session_date}: {e}")
+            return None
+
+    # Create quartile bins based on all confidence values
+    quartile_bins = pd.qcut(confidence_rates, q=4, labels=False)
+
+    # Create the plot
+    plt.figure(figsize=(12, 7))
+    colors = ['blue', 'green', 'orange', 'red']  # From lowest to highest confidence
+
+    if win_loss:
+        for quartile in range(4):
+            quartile_rewarded = (quartile_bins == quartile) & (reward_outcomes == 1)
+            quartile_unrewarded = (quartile_bins == quartile) & (reward_outcomes == 0)
+
+            if np.sum(quartile_rewarded) > 0:
+                rewarded_avg = np.mean(plotting_data[quartile_rewarded], axis=0)
+                rewarded_sem = calculate_sem(plotting_data[quartile_rewarded], axis=0)
+                plt.fill_between(time_axis,
+                                 rewarded_avg - rewarded_sem,
+                                 rewarded_avg + rewarded_sem,
+                                 color=colors[quartile], alpha=0.3)
+                plt.plot(time_axis, rewarded_avg,
+                         color=colors[quartile], linewidth=2,
+                         label=f'Quartile {quartile + 1} Rewarded (n={np.sum(quartile_rewarded)})')
+
+            if np.sum(quartile_unrewarded) > 0:
+                unrewarded_avg = np.mean(plotting_data[quartile_unrewarded], axis=0)
+                unrewarded_sem = calculate_sem(plotting_data[quartile_unrewarded], axis=0)
+                plt.plot(time_axis, unrewarded_avg,
+                         color=colors[quartile], linewidth=2, linestyle='--',
+                         label=f'Quartile {quartile + 1} Unrewarded (n={np.sum(quartile_unrewarded)})')
+    else:
+        for quartile in range(4):
+            quartile_trials = quartile_bins == quartile
+            if np.sum(quartile_trials) > 0:
+                quartile_avg = np.mean(plotting_data[quartile_trials], axis=0)
+                quartile_sem = calculate_sem(plotting_data[quartile_trials], axis=0)
+
+                plt.fill_between(time_axis,
+                                 quartile_avg - quartile_sem,
+                                 quartile_avg + quartile_sem,
+                                 color=colors[quartile], alpha=0.3)
+                plt.plot(time_axis, quartile_avg,
+                         color=colors[quartile], linewidth=2,
+                         label=f'Quartile {quartile + 1} (n={np.sum(quartile_trials)})')
+
+    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+    plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+    plt.xlabel('Time (s)', fontsize=12)
+    plt.ylabel('ΔF/F', fontsize=12)
+    plt.title(plot_title, fontsize=14)
+    plt.xlim([-pre_cue_time, post_cue_time])
+    plt.legend(loc='upper right')
+    plt.tight_layout()
+
+    # Save the figure
+    fig_name = f"computer_confidence_quartiles{'_pooled' if session_date is None else ''}"
+    save_figure(plt.gcf(), subject_id, session_date or "pooled",
+                f"{fig_name}{'_winloss' if win_loss else ''}")
+
+    plt.show()
+
+    return {
+        'quartile_bins': quartile_bins,
+        'confidence_rates': confidence_rates
     }
 
 def plot_choice_history(behavior_data, subject_id, session_date):
@@ -1112,7 +1318,6 @@ def plot_per_session_win_loss(subject_id):
     save_figure(fig, subject_id, "all_sessions", "per_session_win_loss_with_choices")
     
     plt.show()
-    return session_analyses
 
 def analyze_session_win_loss_difference_gap(subject_id, session_date=None):
     """
@@ -1191,7 +1396,7 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None):
                 color=blue_colors[idx],
                 label=f'Session {sess_date}', linewidth=2)
 
-    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Cue Onset')
+    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
 
     plt.xlabel('Time (s)', fontsize=12)
@@ -1380,7 +1585,6 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None):
     save_figure(fig, subject_id, "all_sessions", "per_session_win_loss_with_choices")
     
     plt.show()
-    return session_analyses
 
 def analyze_previous_outcome_effect(subject_id):
     """
@@ -1510,10 +1714,10 @@ def analyze_previous_outcome_effect(subject_id):
     }
     
     labels = {
-        'prev_win_curr_win': f"Prev Win → Curr Win (n={condition_data['prev_win_curr_win']['count']})",
-        'prev_win_curr_loss': f"Prev Win → Curr Loss (n={condition_data['prev_win_curr_loss']['count']})",
-        'prev_loss_curr_win': f"Prev Loss → Curr Win (n={condition_data['prev_loss_curr_win']['count']})",
-        'prev_loss_curr_loss': f"Prev Loss → Curr Loss (n={condition_data['prev_loss_curr_loss']['count']})"
+        'prev_win_curr_win': f"Win-Win (n={condition_data['prev_win_curr_win']['count']})",
+        'prev_win_curr_loss': f"Win-Loss (n={condition_data['prev_win_curr_loss']['count']})",
+        'prev_loss_curr_win': f"Loss-Win (n={condition_data['prev_loss_curr_win']['count']})",
+        'prev_loss_curr_loss': f"Loss-Loss (n={condition_data['prev_loss_curr_loss']['count']})"
     }
     
     # Plot each condition
@@ -1527,7 +1731,7 @@ def analyze_previous_outcome_effect(subject_id):
                     color=color, linewidth=2, label=labels[condition])
     
     # Add vertical line at cue onset
-    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Cue Onset')
+    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
     
     # Labels and formatting
