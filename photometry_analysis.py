@@ -488,6 +488,10 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
             print(f"Processing {subject_id}/{session_date}...")
             result = process_session(subject_id, session_date)
             if result:
+                if len(result['non_m_trials']) < 100:
+                    print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(result['non_m_trials'])}).")
+                    continue
+
                 all_sessions.append(result)
                 all_plotting_data.append(result['plotting_data'])
                 session_dates.append(session_date)
@@ -765,9 +769,13 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False)
                          os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
         
         # Process each session separately to maintain session-specific reward rate context
-        for sess_date in sessions:
-            session_result = process_session(subject_id, sess_date)
+        for session_date in sessions:
+            session_result = process_session(subject_id, session_date)
             if not session_result:
+                continue
+
+            if len(session_result['non_m_trials']) < 100:
+                print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
                 continue
 
             # Calculate reward rates for this session
@@ -834,6 +842,17 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False)
 
     # Create quartile bins based on all reward rates
     quartile_bins = pd.qcut(reward_rates, q=4, labels=False)
+    
+    # Calculate average reward rate for each quartile
+    quartile_averages = []
+    for quartile in range(4):
+        quartile_avg = np.mean(reward_rates[quartile_bins == quartile])
+        quartile_averages.append(quartile_avg)
+    
+    # Print average reward rates for each quartile
+    print(f"\nAverage reward rates by quartile:")
+    for quartile in range(4):
+        print(f"Quartile {quartile + 1}: {quartile_averages[quartile]:.4f}")
 
     # Create the plot
     plt.figure(figsize=(12, 7))
@@ -853,14 +872,14 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False)
                                color=colors[quartile], alpha=0.3)
                 plt.plot(time_axis, rewarded_avg,
                         color=colors[quartile], linewidth=2,
-                        label=f'Quartile {quartile + 1} Rewarded')
+                        label=f'Quartile {quartile + 1} Rewarded (n={np.sum(quartile_rewarded)})')
 
             if np.sum(quartile_unrewarded) > 0:
                 unrewarded_avg = np.mean(plotting_data[quartile_unrewarded], axis=0)
                 unrewarded_sem = calculate_sem(plotting_data[quartile_unrewarded], axis=0)
                 plt.plot(time_axis, unrewarded_avg,
                         color=colors[quartile], linewidth=2, linestyle='--',
-                        label=f'Quartile {quartile + 1} Unrewarded')
+                        label=f'Quartile {quartile + 1} Unrewarded (n={np.sum(quartile_unrewarded)})')
     else:
         for quartile in range(4):
             quartile_trials = quartile_bins == quartile
@@ -874,7 +893,7 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False)
                                color=colors[quartile], alpha=0.3)
                 plt.plot(time_axis, quartile_avg,
                         color=colors[quartile], linewidth=2,
-                        label=f'Quartile {quartile + 1}')
+                        label=f'Quartile {quartile + 1} (n={np.sum(quartile_trials)})')
 
     plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
@@ -883,7 +902,12 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False)
     plt.title(plot_title, fontsize=14)
     plt.xlim([-pre_cue_time, post_cue_time])
     plt.legend(loc='upper right')
-    plt.tight_layout()
+    
+    # Add text with quartile averages at the bottom of the plot
+    quartile_text = "Average reward rates: " + ", ".join([f"Q{q+1}: {avg:.4f}" for q, avg in enumerate(quartile_averages)])
+    plt.figtext(0.5, 0.01, quartile_text, ha='center', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+
+    plt.tight_layout(rect=[0, 0.05, 1, 1])  # Make room for the text at the bottom
 
     # Save the figure
     fig_name = f"reward_rate_quartiles{'_pooled' if session_date is None else ''}"
@@ -929,9 +953,13 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
                            os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
 
         # Process each session separately to maintain session-specific confidence context
-        for sess_date in sessions:
-            session_result = process_session(subject_id, sess_date)
+        for session_date in sessions:
+            session_result = process_session(subject_id, session_date)
             if not session_result:
+                continue
+
+            if len(session_result['non_m_trials']) < 100:
+                print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
                 continue
 
             # Get behavioral data for this session
@@ -941,10 +969,10 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
             try:
                 df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
                 df['date'] = df['date'].astype(str)  # Ensure date is a string
-                session_data = df[(df['subjid'] == subject_id) & (df['date'] == sess_date) & (df["ignore"] == 0)]
+                session_data = df[(df['subjid'] == subject_id) & (df['date'] == session_date) & (df["ignore"] == 0)]
 
                 if session_data.empty:
-                    print(f"No p-value data found for {subject_id} on {sess_date}")
+                    print(f"No p-value data found for {subject_id} on {session_date}")
                     continue
 
                 # Extract p-values and calculate confidence
@@ -979,7 +1007,7 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
                 time_axis = session_result['time_axis']
 
             except Exception as e:
-                print(f"Error processing p-values for {subject_id}/{sess_date}: {e}")
+                print(f"Error processing p-values for {subject_id}/{session_date}: {e}")
                 continue
 
         plot_title = f'Pooled Photometry by Computer Confidence Quartiles: {subject_id}'
@@ -1041,6 +1069,17 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
     # Create quartile bins based on all confidence values
     quartile_bins = pd.qcut(confidence_rates, q=4, labels=False)
 
+    # Calculate average confidence for each quartile
+    quartile_averages = []
+    for quartile in range(4):
+        quartile_avg = np.mean(confidence_rates[quartile_bins == quartile])
+        quartile_averages.append(quartile_avg)
+    
+    # Print average confidence for each quartile
+    print(f"\nAverage computer confidence by quartile:")
+    for quartile in range(4):
+        print(f"Quartile {quartile + 1}: {quartile_averages[quartile]:.4f}")
+
     # Create the plot
     plt.figure(figsize=(12, 7))
     colors = ['blue', 'green', 'orange', 'red']  # From lowest to highest confidence
@@ -1089,7 +1128,12 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
     plt.title(plot_title, fontsize=14)
     plt.xlim([-pre_cue_time, post_cue_time])
     plt.legend(loc='upper right')
-    plt.tight_layout()
+    
+    # Add text with quartile averages at the bottom of the plot
+    quartile_text = "Average confidence values: " + ", ".join([f"Q{q+1}: {avg:.4f}" for q, avg in enumerate(quartile_averages)])
+    plt.figtext(0.5, 0.01, quartile_text, ha='center', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+
+    plt.tight_layout(rect=[0, 0.05, 1, 1])  # Make room for the text at the bottom
 
     # Save the figure
     fig_name = f"computer_confidence_quartiles{'_pooled' if session_date is None else ''}"
@@ -1164,10 +1208,14 @@ def plot_per_session_win_loss(subject_id):
     session_analyses = {}
 
     # First pass: find maximum and minimum values for proper y-axis scaling
-    for sess_date in sessions:
-        session_result = process_session(subject_id, sess_date)
+    for session_date in sessions:
+        session_result = process_session(subject_id, session_date)
         if not session_result:
-            print(f"Could not process session {subject_id}/{sess_date}")
+            print(f"Could not process session {subject_id}/{session_date}")
+            continue
+
+        if len(session_result['non_m_trials']) < 100:
+            print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
             continue
 
         # Filter out missed trials
@@ -1212,11 +1260,11 @@ def plot_per_session_win_loss(subject_id):
     gs = plt.GridSpec(n_rows*2, n_cols, height_ratios=[2, 1] * n_rows)  # Repeat [2,1] pattern for each row
     
     # Process each session
-    for i, sess_date in enumerate(sessions):
+    for i, session_date in enumerate(sessions):
         row = i // n_cols  # Row index (integer division)
         col = i % n_cols   # Column index
         
-        session_result = process_session(subject_id, sess_date)
+        session_result = process_session(subject_id, session_date)
         if not session_result:
             continue
 
@@ -1269,11 +1317,11 @@ def plot_per_session_win_loss(subject_id):
         # Labels and formatting for photometry subplot
         ax_photo.set_xlabel('Time (s)')
         ax_photo.set_ylabel('ΔF/F')
-        ax_photo.set_title(f'Session {sess_date} (n={len(rewarded_trials) + len(unrewarded_trials)} trials)')
+        ax_photo.set_title(f'Session {session_date} (n={len(rewarded_trials) + len(unrewarded_trials)} trials)')
         ax_photo.legend(loc='upper right')
         
         # Store analysis results
-        session_analyses[sess_date] = {
+        session_analyses[session_date] = {
             'rewarded_avg': rewarded_avg if len(rewarded_trials) > 0 else None,
             'unrewarded_avg': unrewarded_avg if len(unrewarded_trials) > 0 else None,
             'rewarded_n': len(rewarded_trials),
@@ -1353,11 +1401,15 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None):
     session_differences = {}
 
     # Process each session
-    for idx, sess_date in enumerate(sessions):
+    for idx, session_date in enumerate(sessions):
         # Process the session
-        session_result = process_session(subject_id, sess_date)
+        session_result = process_session(subject_id, session_date)
         if not session_result:
-            print(f"Could not process session {subject_id}/{sess_date}")
+            print(f"Could not process session {subject_id}/{session_date}")
+            continue
+
+        if len(session_result['non_m_trials']) < 100:
+            print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
             continue
 
         # Filter out missed trials
@@ -1385,7 +1437,7 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None):
         win_loss_sem = np.sqrt(rewarded_sem**2 + unrewarded_sem**2)
 
         # Store the difference
-        session_differences[sess_date] = win_loss_diff
+        session_differences[session_date] = win_loss_diff
 
         # Plot differences with SEM
         plt.fill_between(session_result['time_axis'],
@@ -1394,7 +1446,7 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None):
                         color=blue_colors[idx], alpha=0.2)
         plt.plot(session_result['time_axis'], win_loss_diff,
                 color=blue_colors[idx],
-                label=f'Session {sess_date}', linewidth=2)
+                label=f'Session {session_date}', linewidth=2)
 
     plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
@@ -1435,10 +1487,10 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None):
     session_analyses = {}
 
     # First pass: find maximum and minimum values for proper y-axis scaling
-    for sess_date in sessions:
-        session_result = process_session(subject_id, sess_date)
+    for session_date in sessions:
+        session_result = process_session(subject_id, session_date)
         if not session_result:
-            print(f"Could not process session {subject_id}/{sess_date}")
+            print(f"Could not process session {subject_id}/{session_date}")
             continue
 
         # Filter out missed trials
@@ -1482,8 +1534,8 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None):
     gs = plt.GridSpec(2, n_cols, height_ratios=[2, 1])  # 2:1 ratio for photometry:choice plots
     
     # Process each session
-    for i, sess_date in enumerate(sessions):
-        session_result = process_session(subject_id, sess_date)
+    for i, session_date in enumerate(sessions):
+        session_result = process_session(subject_id, session_date)
         if not session_result:
             continue
 
@@ -1536,11 +1588,11 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None):
         # Labels and formatting for photometry subplot
         ax_photo.set_xlabel('Time (s)')
         ax_photo.set_ylabel('ΔF/F')
-        ax_photo.set_title(f'Session {sess_date} (n={len(rewarded_trials) + len(unrewarded_trials)} trials)')
+        ax_photo.set_title(f'Session {session_date} (n={len(rewarded_trials) + len(unrewarded_trials)} trials)')
         ax_photo.legend(loc='upper right')
         
         # Store analysis results
-        session_analyses[sess_date] = {
+        session_analyses[session_date] = {
             'rewarded_avg': rewarded_avg if len(rewarded_trials) > 0 else None,
             'unrewarded_avg': unrewarded_avg if len(unrewarded_trials) > 0 else None,
             'rewarded_n': len(rewarded_trials),
@@ -1624,6 +1676,10 @@ def analyze_previous_outcome_effect(subject_id):
             print(f"Processing {subject_id}/{session_date}...")
             result = process_session(subject_id, session_date)
             if result:
+                if len(result['non_m_trials']) < 100: 
+                    print(f"Skipping {subject_id}/{session_date} due to low number of trials")
+                    continue
+
                 all_sessions.append(result)
                 session_dates.append(session_date)
                 
