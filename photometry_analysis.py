@@ -8,6 +8,7 @@ import glob
 import warnings
 import pandas as pd
 from pytz.exceptions import NonExistentTimeError
+import scipy.stats
 
 # Suppress deprecation warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -24,6 +25,14 @@ total_window_samples = pre_cue_samples + post_cue_samples
 
 PARQUET_PATH = r"Z:\delab\matchingpennies\matchingpennies_datatable.parquet"
 CODE_VERSION = "1.0.4"  # Increment this when making analysis changes
+_SESSION_CACHE = {}
+
+
+def clear_memory():
+    global _SESSION_CACHE
+    _SESSION_CACHE = {}
+    import gc
+    gc.collect()
 
 def calculate_sem(data, axis=0):
     """Calculate Standard Error of Mean (SEM)"""
@@ -132,9 +141,13 @@ def save_figure(fig, subject_id, session_date, fig_name="figure"):
         print(f"Error saving figure: {e}")
 
 
-def process_session(subject_id, session_date, force_recompute=False):
+def process_session(subject_id, session_date, force_recompute=False, use_global_cache=True):
     """Process a single session for a given subject"""
 
+    cache_key = f"{subject_id}/{session_date}"
+    if use_global_cache and cache_key in _SESSION_CACHE and not force_recompute:
+        return _SESSION_CACHE[cache_key]
+    
     if not force_recompute:
         saved_result = check_saved_results(subject_id, session_date)  
         if saved_result is not None:
@@ -231,6 +244,8 @@ def process_session(subject_id, session_date, force_recompute=False):
         }
 
         save_results(result, subject_id, session_date)
+        if use_global_cache:
+            _SESSION_CACHE[cache_key] = result
         return result
 
     except Exception as e:
@@ -1206,8 +1221,9 @@ def plot_per_session_win_loss(subject_id):
     max_peak = float('-inf')
     min_peak = float('inf')
     session_analyses = {}
+    valid_sessions = []
 
-    # First pass: find maximum and minimum values for proper y-axis scaling
+    # First pass: find valid sessions and determine y-axis scaling
     for session_date in sessions:
         session_result = process_session(subject_id, session_date)
         if not session_result:
@@ -1216,7 +1232,10 @@ def plot_per_session_win_loss(subject_id):
 
         if len(session_result['non_m_trials']) < 100:
             print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
-            continue
+            continue  # Skip this session
+            
+        # Add to valid sessions list since it has enough trials
+        valid_sessions.append(session_date)
 
         # Filter out missed trials
         non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
@@ -1249,7 +1268,11 @@ def plot_per_session_win_loss(subject_id):
     y_min = min_peak - 0.1 * y_range
 
     # Calculate number of sessions and rows/columns for subplots
-    n_sessions = len(sessions)
+    n_sessions = len(valid_sessions)  # Use count of valid sessions
+    if n_sessions == 0:
+        print(f"No valid sessions found for {subject_id} (all have < 100 trials)")
+        return {}
+        
     n_cols = 3  # Always 3 columns
     n_rows = (n_sessions + n_cols - 1) // n_cols  # Ceiling division for number of rows needed
     
@@ -1259,8 +1282,8 @@ def plot_per_session_win_loss(subject_id):
     # Create GridSpec to control the layout - 2 rows per session (photometry + choice)
     gs = plt.GridSpec(n_rows*2, n_cols, height_ratios=[2, 1] * n_rows)  # Repeat [2,1] pattern for each row
     
-    # Process each session
-    for i, session_date in enumerate(sessions):
+    # Process only valid sessions
+    for i, session_date in enumerate(valid_sessions):
         row = i // n_cols  # Row index (integer division)
         col = i % n_cols   # Column index
         
@@ -1366,8 +1389,11 @@ def plot_per_session_win_loss(subject_id):
     save_figure(fig, subject_id, "all_sessions", "per_session_win_loss_with_choices")
     
     plt.show()
+    
+    return session_analyses
 
-def analyze_session_win_loss_difference_gap(subject_id, session_date=None):
+
+def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_conf=False, df=None, sem=True):
     """
     Analyze win-loss difference across photometry sessions for a subject
 
@@ -1377,6 +1403,10 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None):
         The identifier for the subject
     session_date : str, optional
         Specific session to analyze. If None, analyze all sessions.
+    comp_conf : bool, optional
+        If True, sorts sessions by computer confidence rather than chronologically
+    df : pandas.DataFrame, optional
+        Pre-loaded dataframe to use for confidence calculations
 
     Returns:
     --------
@@ -1386,19 +1416,24 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None):
     if session_date is None:
         subject_path = os.path.join(base_dir, subject_id)
         sessions = sorted([d for d in os.listdir(subject_path)
-                    if os.path.isdir(os.path.join(subject_path, d)) and
-                    os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+                           if os.path.isdir(os.path.join(subject_path, d)) and
+                           os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
     else:
         sessions = [session_date]
 
-    num_sessions = len(sessions)
-    blue_colors = plt.cm.Blues(np.linspace(0.3, 1, num_sessions))
-
-    # Prepare figure for win-loss difference plot
-    plt.figure(figsize=(12, 7))
+    # Load dataframe if needed for confidence calculations and not provided
+    if comp_conf and df is None:
+        try:
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            print(f"Loaded parquet data for confidence calculations")
+        except Exception as e:
+            print(f"Error loading parquet data: {e}")
+            comp_conf = False  # Fallback to chronological sorting
 
     # Store results for each session
     session_differences = {}
+    session_confidences = {}
 
     # Process each session
     for idx, session_date in enumerate(sessions):
@@ -1430,213 +1465,145 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None):
         rewarded_sem = calculate_sem(rewarded_trials, axis=0)
         unrewarded_sem = calculate_sem(unrewarded_trials, axis=0)
 
-        # Compute win-loss difference
+        # Compute win-loss difference (keeping original calculation)
         rewarded_avg = rewarded_avg + np.abs(np.min([rewarded_avg, unrewarded_avg]))
         unrewarded_avg = unrewarded_avg + np.abs(np.min([rewarded_avg, unrewarded_avg]))
         win_loss_diff = rewarded_avg - unrewarded_avg
         win_loss_sem = np.sqrt(rewarded_sem**2 + unrewarded_sem**2)
 
-        # Store the difference
-        session_differences[session_date] = win_loss_diff
+        # Store the difference data
+        session_differences[session_date] = {
+            'diff': win_loss_diff,
+            'sem': win_loss_sem,
+            'time_axis': session_result['time_axis']
+        }
 
-        # Plot differences with SEM
-        plt.fill_between(session_result['time_axis'],
-                        win_loss_diff - win_loss_sem,
-                        win_loss_diff + win_loss_sem,
-                        color=blue_colors[idx], alpha=0.2)
-        plt.plot(session_result['time_axis'], win_loss_diff,
-                color=blue_colors[idx],
-                label=f'Session {session_date}', linewidth=2)
+        # Calculate computer confidence if requested
+        if comp_conf:
+            try:
+                # Get data for this session from provided or loaded dataframe
+                session_df = df[(df['subjid'] == subject_id) & (df['date'] == session_date) & (df["ignore"] == 0)]
+                
+                if session_df.empty:
+                    print(f"No behavioral data found for {subject_id}/{session_date}")
+                    continue
+                
+                # Extract p-values and calculate confidence
+                if 'min_pvalue' in session_df.columns:
+                    # Extract p-values
+                    p_values = session_df['min_pvalue'].values
+                    
+                    # Remove NaN values
+                    p_values = p_values[~np.isnan(p_values)]
+                    
+                    if len(p_values) == 0:
+                        print(f"No valid p-values for {subject_id}/{session_date}")
+                        continue
+                    
+                    # Cap very small p-values at 10^-12 to avoid infinite confidence
+                    min_p_value = 1e-12
+                    p_values = np.maximum(p_values, min_p_value)
+                    
+                    # Calculate confidence as -log10(p_value)
+                    confidence = -np.log10(p_values)
+                    
+                    # Calculate average confidence for the session
+                    avg_confidence = np.mean(confidence)
+                    session_confidences[session_date] = avg_confidence
+                    print(f"Session {session_date} average confidence: {avg_confidence:.4f}")
+                else:
+                    print(f"No min_pvalue column found in data for {subject_id}/{session_date}")
+            except Exception as e:
+                print(f"Error calculating confidence for {subject_id}/{session_date}: {e}")
 
+    # Check if we have any valid sessions
+    if not session_differences:
+        print(f"No valid sessions found for {subject_id}")
+        return None
+
+    # Sort sessions based on confidence or chronologically
+    if comp_conf and session_confidences:
+        # Filter out sessions with missing confidence values
+        valid_sessions = [s for s in session_confidences.keys() if s in session_differences]
+        
+        if not valid_sessions:
+            print("No sessions with valid confidence values found")
+            sorted_sessions = sorted(session_differences.keys())
+        else:
+            # Sort by confidence (highest first)
+            sorted_sessions = sorted(valid_sessions, key=lambda s: session_confidences.get(s, 0), reverse=True)
+            
+            # Print the confidence ranking
+            print("\nSessions ranked by computer confidence (highest to lowest):")
+            for i, sess in enumerate(sorted_sessions):
+                print(f"{i+1}. Session {sess}: {session_confidences[sess]:.4f}")
+    else:
+        # Use chronological sorting (default)
+        sorted_sessions = sorted(session_differences.keys())
+
+    # Create colors for plotting
+    num_sessions = len(sorted_sessions)
+    if comp_conf and session_confidences:
+        # When sorting by confidence, use reversed color gradient (highest confidence = lightest blue)
+        blue_colors = plt.cm.Blues(np.linspace(0.3, 1, num_sessions))
+    else:
+        # Default: earliest session = lightest blue
+        blue_colors = plt.cm.Blues(np.linspace(0.3, 1, num_sessions))
+
+    # Create plot
+    plt.figure(figsize=(12, 7))
+
+    # Plot each session's win-loss difference
+    for idx, sess_date in enumerate(sorted_sessions):
+        time_axis = session_differences[sess_date]['time_axis']
+        win_loss_diff = session_differences[sess_date]['diff']
+        win_loss_sem = session_differences[sess_date]['sem']
+        
+        # Create label with confidence value if available
+        if comp_conf and sess_date in session_confidences:
+            label = f'Session {sess_date} (conf: {session_confidences[sess_date]:.2f})'
+        else:
+            label = f'Session {sess_date}'
+        
+        # Plot with shaded error region
+        if sem:
+            plt.fill_between(time_axis,
+                            win_loss_diff - win_loss_sem,
+                            win_loss_diff + win_loss_sem,
+                            color=blue_colors[idx], alpha=0.2)
+        plt.plot(time_axis, win_loss_diff,
+                 color=blue_colors[idx],
+                 label=label, linewidth=2)
+
+    # Add reference lines
     plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
 
+    # Labels and formatting
     plt.xlabel('Time (s)', fontsize=12)
     plt.ylabel('Rewarded - Unrewarded ΔF/F', fontsize=12)
-    plt.title(f'Win-Loss Difference: {subject_id}', fontsize=14)
+    
+    sort_type = "Computer Confidence" if comp_conf else "Chronological"
+    plt.title(f'Win-Loss Difference: {subject_id} (sorted by {sort_type})', fontsize=14)
+    
     plt.xlim([-pre_cue_time, post_cue_time])
     plt.legend(loc='upper right')
     plt.tight_layout()
 
     # Save the figure
-    save_figure(plt.gcf(), subject_id, "win_loss_diff", "win_loss_difference")
+    sort_suffix = "by_comp_conf" if comp_conf else "chronological"
+    sem_suffix = "_sem" if sem else ""
+    save_figure(plt.gcf(), subject_id, "win_loss_diff", f"win_loss_difference_{sort_suffix}{sem_suffix}")
 
     plt.show()
 
-    """
-    Plot win/loss traces for each session of a subject with choice history
-    
-    Parameters:
-    -----------
-    subject_id : str
-        The identifier for the subject
-        
-    Returns:
-    --------
-    dict: Dictionary of session win-loss analyses
-    """
-    # Find all sessions for the subject
-    subject_path = os.path.join(base_dir, subject_id)
-    sessions = sorted([d for d in os.listdir(subject_path)
-                if os.path.isdir(os.path.join(subject_path, d)) and
-                os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+    # Return results
+    return {
+        'session_differences': session_differences,
+        'session_confidences': session_confidences if comp_conf else None,
+        'sorted_sessions': sorted_sessions
+    }
 
-    # Find max peak for consistent y-axis scaling
-    max_peak = float('-inf')
-    min_peak = float('inf')
-    session_analyses = {}
-
-    # First pass: find maximum and minimum values for proper y-axis scaling
-    for session_date in sessions:
-        session_result = process_session(subject_id, session_date)
-        if not session_result:
-            print(f"Could not process session {subject_id}/{session_date}")
-            continue
-
-        # Filter out missed trials
-        non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
-                                  if idx in session_result["non_m_trials"]])
-
-        # Get reward outcomes and photometry data
-        reward_outcomes = session_result["reward_outcomes"][non_m_indices]
-        session_plots = session_result['plotting_data']
-
-        # Separate rewarded and unrewarded trials
-        rewarded_trials = session_plots[reward_outcomes == 1]
-        unrewarded_trials = session_plots[reward_outcomes == 0]
-
-        # Compute average rewarded and unrewarded signals
-        if len(rewarded_trials) > 0:
-            rewarded_avg = np.mean(rewarded_trials, axis=0)
-            rewarded_sem = calculate_sem(rewarded_trials, axis=0)
-            max_peak = max(max_peak, np.max(rewarded_avg + rewarded_sem))
-            min_peak = min(min_peak, np.min(rewarded_avg - rewarded_sem))
-            
-        if len(unrewarded_trials) > 0:
-            unrewarded_avg = np.mean(unrewarded_trials, axis=0)
-            unrewarded_sem = calculate_sem(unrewarded_trials, axis=0)
-            max_peak = max(max_peak, np.max(unrewarded_avg + unrewarded_sem))
-            min_peak = min(min_peak, np.min(unrewarded_avg - unrewarded_sem))
-
-    # Add 20% padding to y-axis limits
-    y_range = max_peak - min_peak
-    y_max = max_peak + 0.1 * y_range
-    y_min = min_peak - 0.1 * y_range
-
-    # Calculate number of sessions and columns for subplots
-    n_sessions = len(sessions)
-    n_cols = min(3, n_sessions)
-    
-    # Create figure with 2 rows (photometry on top, choice history below)
-    fig = plt.figure(figsize=(n_cols * 6, 12))
-    
-    # Create GridSpec to control the layout
-    gs = plt.GridSpec(2, n_cols, height_ratios=[2, 1])  # 2:1 ratio for photometry:choice plots
-    
-    # Process each session
-    for i, session_date in enumerate(sessions):
-        session_result = process_session(subject_id, session_date)
-        if not session_result:
-            continue
-
-        # Filter out missed trials
-        non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
-                                  if idx in session_result["non_m_trials"]])
-
-        # Get reward outcomes and photometry data
-        reward_outcomes = session_result["reward_outcomes"][non_m_indices]
-        session_plots = session_result['plotting_data']
-
-        # Separate rewarded and unrewarded trials
-        rewarded_trials = session_plots[reward_outcomes == 1]
-        unrewarded_trials = session_plots[reward_outcomes == 0]
-
-        # Create subplot for photometry data (top row)
-        ax_photo = fig.add_subplot(gs[0, i % n_cols])
-        
-        # Photometry data - rewarded
-        if len(rewarded_trials) > 0:
-            rewarded_avg = np.mean(rewarded_trials, axis=0)
-            rewarded_sem = calculate_sem(rewarded_trials, axis=0)
-            ax_photo.fill_between(session_result['time_axis'],
-                       rewarded_avg - rewarded_sem,
-                       rewarded_avg + rewarded_sem,
-                       color='lightgreen', alpha=0.3)
-            ax_photo.plot(session_result['time_axis'], rewarded_avg,
-                 color='green', linewidth=2,
-                 label=f'Win (n={len(rewarded_trials)})')
-        
-        # Photometry data - unrewarded
-        if len(unrewarded_trials) > 0:
-            unrewarded_avg = np.mean(unrewarded_trials, axis=0)
-            unrewarded_sem = calculate_sem(unrewarded_trials, axis=0)
-            ax_photo.fill_between(session_result['time_axis'],
-                       unrewarded_avg - unrewarded_sem,
-                       unrewarded_avg + unrewarded_sem,
-                       color='lightsalmon', alpha=0.3)
-            ax_photo.plot(session_result['time_axis'], unrewarded_avg,
-                 color='darkorange', linewidth=2,
-                 label=f'Loss (n={len(unrewarded_trials)})')
-        
-        # Add vertical line at cue onset
-        ax_photo.axvline(x=0, color='red', linestyle='--', linewidth=1.5)
-        ax_photo.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
-        
-        # Set y-axis limit consistent across all photometry subplots
-        ax_photo.set_ylim([y_min, y_max])
-        
-        # Labels and formatting for photometry subplot
-        ax_photo.set_xlabel('Time (s)')
-        ax_photo.set_ylabel('ΔF/F')
-        ax_photo.set_title(f'Session {session_date} (n={len(rewarded_trials) + len(unrewarded_trials)} trials)')
-        ax_photo.legend(loc='upper right')
-        
-        # Store analysis results
-        session_analyses[session_date] = {
-            'rewarded_avg': rewarded_avg if len(rewarded_trials) > 0 else None,
-            'unrewarded_avg': unrewarded_avg if len(unrewarded_trials) > 0 else None,
-            'rewarded_n': len(rewarded_trials),
-            'unrewarded_n': len(unrewarded_trials),
-            'time_axis': session_result['time_axis']
-        }
-        
-        # Create subplot for choice history (bottom row)
-        ax_choice = fig.add_subplot(gs[1, i % n_cols])
-        
-        # Extract choices and rewards
-        choices = session_result['behavioral_data']['choice']
-        rewards = session_result['behavioral_data']['reward']
-        
-        # Plot choice history
-        for j, choice in enumerate(choices):
-            if choice == 'L':
-                ax_choice.plot([j + 1, j + 1], [0, 1], 'r-', linewidth=1.5)
-                if rewards[j] == 1:
-                    ax_choice.plot(j + 1, 1, 'ro', markersize=8, fillstyle='none')
-            elif choice == 'R':
-                ax_choice.plot([j + 1, j + 1], [0, -1], 'b-', linewidth=1.5)
-                if rewards[j] == 1:
-                    ax_choice.plot(j + 1, -1, 'bo', markersize=8, fillstyle='none')
-        
-        # Add the middle line
-        ax_choice.axhline(y=0, color='k', linestyle='-', alpha=0.5)
-        
-        # Set the y-axis limits and labels
-        ax_choice.set_ylim(-1.5, 1.5)
-        ax_choice.set_yticks([-1, 0, 1])
-        ax_choice.set_yticklabels(['Right', '', 'Left'])
-        
-        # Set the x-axis and title
-        ax_choice.set_xlabel('Trial Number')
-        ax_choice.set_title('Choice History')
-        ax_choice.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    
-    # Save the figure
-    save_figure(fig, subject_id, "all_sessions", "per_session_win_loss_with_choices")
-    
-    plt.show()
 
 def analyze_previous_outcome_effect(subject_id):
     """
@@ -1809,4 +1776,404 @@ def analyze_previous_outcome_effect(subject_id):
         'session_dates': session_dates,
         'time_axis': time_axis,
         'condition_data': condition_data
+    }
+
+
+def analyze_win_stay_lose_switch(subject_id, session_date=None, df=None):
+    """
+    Calculate Win-Stay, Lose-Switch statistics for a subject using all behavioral trials
+
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    session_date : str, optional
+        Specific session to analyze. If None, analyze all sessions.
+
+    Returns:
+    --------
+    dict: Analysis results including WSLS counts and percentages
+    """
+
+    if df is None:
+        try: 
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+        except Exception as e:
+            print(f"Error loading parquet data: {e}")
+            return None
+
+    # Store results
+    wsls_results = {
+        'win_stay_count': 0,
+        'lose_switch_count': 0,
+        'total_valid_pairs': 0,
+        'total_win_trials': 0,
+        'total_lose_trials': 0,
+        'sessions_analyzed': 0
+    }
+    
+    # Store per-session results
+    session_data = []
+
+    # Get sessions to analyze
+    if session_date is None:
+        # Get all sessions from parquet file for this subject
+        try:
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            sessions = df[df['subjid'] == subject_id]['date'].unique()
+        except Exception as e:
+            print(f"Error loading parquet data: {e}")
+            return None
+    else:
+        sessions = [session_date]
+
+    # Process each session
+    for sess in sessions:
+        print(f"Analyzing WSLS for {subject_id}/{sess}...")
+        
+        # Get behavior data directly from parquet file
+        try:
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            session_df = df[(df['subjid'] == subject_id) & (df['date'] == sess) & (df['ignore'] == 0)]
+            
+            if session_df.empty:
+                print(f"No behavioral data found for {subject_id}/{sess}")
+                continue
+                
+            choices = session_df['choice'].tolist()
+            rewards = session_df['reward'].tolist()
+        except Exception as e:
+            print(f"Error loading behavioral data for {subject_id}/{sess}: {e}")
+            continue
+
+        # Filter out missed ('M') trials
+        valid_indices = [i for i, choice in enumerate(choices) if choice in ['L', 'R']]
+        valid_choices = [choices[i] for i in valid_indices]
+        valid_rewards = [rewards[i] for i in valid_indices]
+
+        # Skip session if not enough valid trials
+        if len(valid_choices) < 2:
+            print(f"Session {sess} has fewer than 2 valid trials. Skipping...")
+            continue
+
+        # Count WSLS occurrences
+        win_stay_count = 0
+        lose_switch_count = 0
+        win_trials = 0
+        lose_trials = 0
+
+        # We start from the second trial since we need to know the previous trial's outcome
+        for i in range(1, len(valid_choices)):
+            prev_choice = valid_choices[i - 1]
+            curr_choice = valid_choices[i]
+            prev_reward = valid_rewards[i - 1]
+
+            # Count win and lose trials from previous trial
+            if prev_reward == 1:
+                win_trials += 1
+                # Win-Stay: previous trial was rewarded and animal made same choice
+                if prev_choice == curr_choice:
+                    win_stay_count += 1
+            else:
+                lose_trials += 1
+                # Lose-Switch: previous trial was not rewarded and animal switched choice
+                if prev_choice != curr_choice:
+                    lose_switch_count += 1
+
+        # Add to total counts
+        wsls_results['win_stay_count'] += win_stay_count
+        wsls_results['lose_switch_count'] += lose_switch_count
+        wsls_results['total_valid_pairs'] += (len(valid_choices) - 1)  # pairs of trials
+        wsls_results['total_win_trials'] += win_trials
+        wsls_results['total_lose_trials'] += lose_trials
+        wsls_results['sessions_analyzed'] += 1
+
+        # Calculate session-specific percentages
+        win_stay_pct = (win_stay_count / win_trials * 100) if win_trials > 0 else 0
+        lose_switch_pct = (lose_switch_count / lose_trials * 100) if lose_trials > 0 else 0
+        wsls_pct = ((win_stay_count + lose_switch_count) / (len(valid_choices) - 1) * 100) if len(valid_choices) > 1 else 0
+        
+        # Store session data
+        session_data.append({
+            'session_date': sess,
+            'win_stay_count': win_stay_count,
+            'win_trials': win_trials,
+            'win_stay_pct': win_stay_pct,
+            'lose_switch_count': lose_switch_count,
+            'lose_trials': lose_trials,
+            'lose_switch_pct': lose_switch_pct,
+            'total_wsls_count': win_stay_count + lose_switch_count,
+            'total_trials': len(valid_choices) - 1,
+            'wsls_pct': wsls_pct
+        })
+
+        # Print session-specific results
+        print(f"  Session {sess} WSLS stats:")
+        print(f"    Win-Stay: {win_stay_count}/{win_trials} trials ({win_stay_pct:.1f}%)")
+        print(f"    Lose-Switch: {lose_switch_count}/{lose_trials} trials ({lose_switch_pct:.1f}%)")
+        print(f"    Total WSLS: {win_stay_count + lose_switch_count}/{len(valid_choices) - 1} trials ({wsls_pct:.1f}%)")
+        print()
+
+    # Calculate overall percentages
+    if wsls_results['total_win_trials'] > 0:
+        wsls_results['win_stay_percentage'] = (wsls_results['win_stay_count'] / wsls_results['total_win_trials']) * 100
+    else:
+        wsls_results['win_stay_percentage'] = 0
+
+    if wsls_results['total_lose_trials'] > 0:
+        wsls_results['lose_switch_percentage'] = (wsls_results['lose_switch_count'] / wsls_results['total_lose_trials']) * 100
+    else:
+        wsls_results['lose_switch_percentage'] = 0
+
+    if wsls_results['total_valid_pairs'] > 0:
+        wsls_results['total_wsls_percentage'] = ((wsls_results['win_stay_count'] + wsls_results['lose_switch_count']) /
+                                                 wsls_results['total_valid_pairs']) * 100
+    else:
+        wsls_results['total_wsls_percentage'] = 0
+
+    # Print overall results
+    print("\n=== Win-Stay, Lose-Switch Analysis ===")
+    print(f"Subject: {subject_id}")
+    print(f"Sessions analyzed: {wsls_results['sessions_analyzed']}")
+    print(f"Total valid trial pairs: {wsls_results['total_valid_pairs']}")
+    print(f"Win-Stay: {wsls_results['win_stay_count']}/{wsls_results['total_win_trials']} trials ({wsls_results['win_stay_percentage']:.1f}%)")
+    print(f"Lose-Switch: {wsls_results['lose_switch_count']}/{wsls_results['total_lose_trials']} trials ({wsls_results['lose_switch_percentage']:.1f}%)")
+    print(f"Overall WSLS: {wsls_results['win_stay_count'] + wsls_results['lose_switch_count']}/{wsls_results['total_valid_pairs']} trials ({wsls_results['total_wsls_percentage']:.1f}%)")
+
+    # Visualization based on whether we're analyzing one or multiple sessions
+    if session_date is None and len(session_data) > 1:
+        # Multiple sessions: show WSLS, win-stay, and lose-switch percentages across sessions
+        plt.figure(figsize=(10, 6))
+        
+        # Extract data for plotting
+        session_numbers = list(range(1, len(session_data) + 1))
+        win_stay_pcts = [s['win_stay_pct'] for s in session_data]
+        lose_switch_pcts = [s['lose_switch_pct'] for s in session_data]
+        wsls_pcts = [s['wsls_pct'] for s in session_data]
+        
+        # Plot win-stay, lose-switch, and overall WSLS percentages
+        plt.plot(session_numbers, win_stay_pcts, 'o-', color='green', label='Win-Stay %')
+        plt.plot(session_numbers, lose_switch_pcts, 'o-', color='orange', label='Lose-Switch %')
+        plt.plot(session_numbers, wsls_pcts, 'o-', color='blue', linewidth=2, label='Overall WSLS %')
+        
+        # Add reference line at 50%
+        plt.axhline(y=50, color='red', linestyle='--', alpha=0.7)
+        
+        # Formatting
+        plt.xlabel('Session Number')
+        plt.ylabel('Percentage (%)')
+        plt.title(f'Win-Stay, Lose-Switch Analysis Across Sessions: {subject_id}')
+        plt.xticks(session_numbers)
+        plt.ylim(0, 100)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        # Add data table below the plot
+        table_data = []
+        for i, s in enumerate(session_data):
+            table_data.append([
+                f"Session {i+1}",
+                f"{s['win_stay_count']}/{s['win_trials']} ({s['win_stay_pct']:.1f}%)",
+                f"{s['lose_switch_count']}/{s['lose_trials']} ({s['lose_switch_pct']:.1f}%)",
+                f"{s['total_wsls_count']}/{s['total_trials']} ({s['wsls_pct']:.1f}%)"
+            ])
+        
+        plt.table(cellText=table_data,
+                  colLabels=['Session', 'Win-Stay', 'Lose-Switch', 'Overall WSLS'],
+                  loc='bottom',
+                  bbox=[0, -0.65, 1, 0.5])
+        
+        plt.subplots_adjust(bottom=0.4)  # Make room for the table
+        
+        # Save figure
+        save_figure(plt.gcf(), subject_id, "all_sessions", "wsls_across_sessions")
+        plt.show()
+    
+    # Store session data in results
+    wsls_results['session_data'] = session_data
+    return wsls_results
+
+
+def analyze_win_loss_difference_heatmap(subject_id):
+    """
+    Create a heatmap visualization of win-loss signal differences across sessions
+
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+
+    Returns:
+    --------
+    dict: Analysis results including win-loss differences across all sessions
+    """
+    # Get all sessions for the subject
+    subject_path = os.path.join(base_dir, subject_id)
+    sessions = sorted([d for d in os.listdir(subject_path)
+                       if os.path.isdir(os.path.join(subject_path, d)) and
+                       os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+
+    # Store results for each session
+    session_differences = []
+    session_dates = []
+    time_axis = None
+    peak_differences = []
+
+    # Process each session
+    for session_date in sessions:
+        # Process the session
+        session_result = process_session(subject_id, session_date)
+        if not session_result:
+            print(f"Could not process session {subject_id}/{session_date}")
+            continue
+
+        if len(session_result['non_m_trials']) < 100:
+            print(
+                f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
+            continue
+
+        # Filter out missed trials
+        non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
+                                  if idx in session_result["non_m_trials"]])
+
+        # Get reward outcomes and photometry data
+        reward_outcomes = session_result["reward_outcomes"][non_m_indices]
+        session_plots = session_result['plotting_data']
+
+        # Separate rewarded and unrewarded trials
+        rewarded_trials = session_plots[reward_outcomes == 1]
+        unrewarded_trials = session_plots[reward_outcomes == 0]
+
+        if len(rewarded_trials) == 0 or len(unrewarded_trials) == 0:
+            print(f"Skipping {subject_id}/{session_date}, missing reward outcomes.")
+            continue
+
+        # Compute average rewarded and unrewarded signals
+        rewarded_avg = np.mean(rewarded_trials, axis=0)
+        unrewarded_avg = np.mean(unrewarded_trials, axis=0)
+
+        # Compute win-loss difference
+        win_loss_diff = rewarded_avg - unrewarded_avg
+
+        # Store session information
+        session_differences.append(win_loss_diff)
+        session_dates.append(session_date)
+
+        # Store time axis (same for all sessions)
+        if time_axis is None:
+            time_axis = session_result['time_axis']
+
+        # Calculate peak difference (maximum absolute difference in post-cue window)
+        post_cue_indices = time_axis > 0
+        peak_diff = np.max(np.abs(win_loss_diff[post_cue_indices]))
+        peak_differences.append(peak_diff)
+
+    if not session_differences:
+        print(f"No valid sessions found for {subject_id}")
+        return None
+
+    # Convert list to array for easier processing
+    win_loss_array = np.array(session_differences)
+
+    # Create figure for heatmap and peak differences plot
+    fig = plt.figure(figsize=(18, 10))
+    gs = plt.GridSpec(2, 1, height_ratios=[2, 1])
+
+    # Plot heatmap of win-loss differences (top)
+    ax_heatmap = fig.add_subplot(gs[0])
+
+    # Flip the array vertically so that the first session is at the bottom
+    # This makes the chronological order go from bottom (earliest) to top (latest)
+    win_loss_array = np.flipud(win_loss_array)
+    flipped_session_dates = session_dates[::-1]  # Reverse the session dates for y-axis labels
+
+    # Create the heatmap
+    im = ax_heatmap.imshow(win_loss_array,
+                           aspect='auto',
+                           extent=[time_axis[0], time_axis[-1], 0, len(session_differences)],
+                           origin='lower',  # origin='lower' puts index 0 at the bottom
+                           cmap='RdBu_r',  # Red-Blue diverging colormap (red=positive, blue=negative)
+                           interpolation='nearest')
+
+    # Add vertical line at cue onset
+    ax_heatmap.axvline(x=0, color='black', linestyle='--', linewidth=1.5)
+
+    # Labels and formatting
+    ax_heatmap.set_xlabel('Time (s)', fontsize=12)
+    ax_heatmap.set_ylabel('Session Number', fontsize=12)
+    ax_heatmap.set_title(f'Win-Loss Signal Difference Across Sessions: {subject_id}', fontsize=14)
+
+    # Add specific y-tick labels at regular intervals
+    tick_step = max(1, len(session_dates) // 10)  # Show at most 10 session labels
+    y_ticks = np.arange(0.5, len(session_dates), tick_step)
+
+    # Create labels for every tick_step interval
+    # Using flipped_session_dates to match the flipped array orientation
+    y_labels = [flipped_session_dates[i] for i in range(0, len(flipped_session_dates), tick_step)]
+
+    # Add session numbers too for clarity
+    session_numbers = list(range(1, len(session_dates) + 1))[::-1]  # Reverse to match flipped orientation
+    y_label_with_num = [f"{i + 1}: {flipped_session_dates[i]}" for i in range(0, len(flipped_session_dates), tick_step)]
+
+    ax_heatmap.set_yticks(y_ticks)
+    ax_heatmap.set_yticklabels(y_label_with_num)
+
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax_heatmap)
+    cbar.set_label('Win-Loss ΔF/F Difference', fontsize=10)
+
+    # Plot peak differences across sessions (bottom)
+    ax_peaks = fig.add_subplot(gs[1])
+
+    # Create x-axis values (session numbers from 1 to n)
+    session_numbers = np.arange(1, len(session_dates) + 1)
+
+    # Create blue gradient for bars
+    blue_colors = plt.cm.Blues(np.linspace(0.3, 1, len(session_dates)))
+
+    # Plot peak differences
+    ax_peaks.bar(session_numbers, peak_differences, color=blue_colors, alpha=0.7)
+
+    # Add trend line
+    if len(peak_differences) > 1:
+        z = np.polyfit(session_numbers, peak_differences, 1)
+        p = np.poly1d(z)
+        ax_peaks.plot(session_numbers, p(session_numbers), 'r--', linewidth=2,
+                      label=f'Trend: {z[0]:.4f}')
+
+        # Add correlation coefficient
+        corr, p_val = scipy.stats.pearsonr(session_numbers, peak_differences)
+        ax_peaks.text(0.05, 0.95, f'r = {corr:.3f}, p = {p_val:.3f}',
+                      transform=ax_peaks.transAxes, fontsize=10,
+                      verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    # Labels and formatting
+    ax_peaks.set_xlabel('Session Number', fontsize=12)
+    ax_peaks.set_ylabel('Peak Win-Loss Difference', fontsize=12)
+    ax_peaks.set_title('Peak Difference Magnitude by Session', fontsize=14)
+    ax_peaks.set_xticks(session_numbers)
+    ax_peaks.set_xticklabels(session_numbers)  # Use session numbers
+    ax_peaks.grid(True, axis='y', alpha=0.3)
+
+    if len(peak_differences) > 1:
+        ax_peaks.legend(loc='upper left')
+
+    # Adjust layout
+    plt.tight_layout()
+
+    # Save figure
+    save_figure(fig, subject_id, "all_sessions", "win_loss_difference_heatmap")
+
+    plt.show()
+
+    # Return analysis results
+    return {
+        'subject_id': subject_id,
+        'session_dates': session_dates,
+        'time_axis': time_axis,
+        'win_loss_differences': session_differences,
+        'peak_differences': peak_differences
     }
