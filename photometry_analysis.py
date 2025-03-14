@@ -1,5 +1,3 @@
-from random import choice
-
 import numpy as np
 from matplotlib import pyplot as plt
 import pickle
@@ -7,7 +5,6 @@ import os
 import glob
 import warnings
 import pandas as pd
-from pytz.exceptions import NonExistentTimeError
 import scipy.stats
 
 # Suppress deprecation warnings
@@ -24,11 +21,12 @@ post_cue_samples = int(post_cue_time * sampling_rate)
 total_window_samples = pre_cue_samples + post_cue_samples
 
 PARQUET_PATH = r"Z:\delab\matchingpennies\matchingpennies_datatable.parquet"
-CODE_VERSION = "1.0.4"  # Increment this when making analysis changes
+CODE_VERSION = "1.0.4"  # Increment this when making analysis changes --> will force recomputation of all data
 _SESSION_CACHE = {}
 
 
 def clear_memory():
+    #used to clear the session cache to reduce working memory utilization
     global _SESSION_CACHE
     _SESSION_CACHE = {}
     import gc
@@ -57,7 +55,9 @@ def get_output_path(subject_id, session_date):
 
 
 def load_behavior_data(subject_id, session_date):
-    """Load behavioral data from Parquet and filter it by subject and session date."""
+    """Load behavioral data from Parquet and filter it by subject and session date. Ignore any session where "ignore" is not 0
+    Calculates correction of sound_time_stamps for the lick_time_stamps, so epochs are aligned by moment of first lick"""
+
     try:
         # Load the parquet file with pyarrow
         df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
@@ -91,6 +91,7 @@ def find_pkl_file(directory):
 
 
 def check_saved_results(subject_id, session_date):
+    """Checks if calculation has already be done and results are stored in a .pkl file. If Code Version changed, recomputes and overwrites results file"""
     session_dir = get_output_path(subject_id, session_date)
     results_file = os.path.join(session_dir, "analysis_results.pkl")
 
@@ -2094,8 +2095,8 @@ def analyze_win_loss_difference_heatmap(subject_id):
     im = ax_heatmap.imshow(win_loss_array,
                            aspect='auto',
                            extent=[time_axis[0], time_axis[-1], 0, len(session_differences)],
-                           origin='lower',  # origin='lower' puts index 0 at the bottom
-                           cmap='RdBu_r',  # Red-Blue diverging colormap (red=positive, blue=negative)
+                           origin='lower',
+                           cmap='RdBu_r',
                            interpolation='nearest')
 
     # Add vertical line at cue onset
@@ -2176,4 +2177,506 @@ def analyze_win_loss_difference_heatmap(subject_id):
         'time_axis': time_axis,
         'win_loss_differences': session_differences,
         'peak_differences': peak_differences
+    }
+
+
+def analyze_loss_streaks_before_win(subject_id, skipped_missed=True, only_1_5=False):
+    """
+    Analyze photometry signals for loss streaks of different lengths that end with a win.
+    This function identifies trials that were not rewarded but where the next trial was rewarded,
+    and categorizes them based on the number of consecutive losses before that trial.
+
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    skipped_missed : bool, optional (default=True)
+        If True, filter out missed trials ('M') from streak calculation
+        If False, include missed trials as losses as long as reward=0
+    only_1_5 : bool, optional (default=False)
+        If True, only plot categories 1 and 5+ (shortest and longest streaks)
+        If False, plot all categories
+
+    Returns:
+    --------
+    dict: Analysis results for different loss streak lengths
+    """
+    # Find all session directories for this subject
+    subject_dir = os.path.join(base_dir, subject_id)
+    if not os.path.exists(subject_dir):
+        print(f"Subject directory not found: {subject_dir}")
+        return None
+
+    # Store data for each loss streak category
+    streak_data = {
+        '1_loss': [],  # T0 loss, T-1 no loss
+        '2_loss': [],  # T0 & T-1 loss, T-2 no loss
+        '3_loss': [],  # T0, T-1, T-2 loss, T-3 no loss
+        '4_loss': [],  # T0, T-1, T-2, T-3 loss, T-4 no loss
+        '5plus_loss': []  # T0 loss preceded by 4+ losses
+    }
+
+    # Sort sessions chronologically
+    sessions = sorted([d for d in os.listdir(subject_dir)
+                       if os.path.isdir(os.path.join(subject_dir, d)) and
+                       os.path.exists(os.path.join(subject_dir, d, "deltaff.npy"))])
+
+    time_axis = None  # Will be set from the first valid session
+
+    # Process each session
+    for session_date in sessions:
+        print(f"Processing {subject_id}/{session_date}...")
+        session_result = process_session(subject_id, session_date)
+        if not session_result:
+            continue
+
+        # Store time axis from the first valid session
+        if time_axis is None:
+            time_axis = session_result['time_axis']
+
+        # Get behavioral data
+        behavior_data = session_result['behavioral_data']
+        rewards = np.array(behavior_data['reward'])
+        choices = np.array(behavior_data['choice'])
+
+        # Get the full trial data - including photometry for all valid trials
+        # (both missed and non-missed that have good photometry recordings)
+        all_valid_trials = session_result['valid_trials']
+        all_valid_epoched_data = session_result['epoched_data'][all_valid_trials]
+
+        # Filter behavioral data based on skipped_missed parameter
+        if skipped_missed:
+            # Create a mask where choice is not 'M'
+            valid_mask = choices != 'M'
+            # Apply filter to raw behavior data
+            filtered_rewards = rewards[valid_mask]
+            filtered_indices = np.where(valid_mask)[0]
+            # Create a mapping from filtered indices to original indices
+            filtered_to_orig = {i: filtered_indices[i] for i in range(len(filtered_indices))}
+            # Create reverse mapping from original to filtered indices
+            orig_to_filtered = {filtered_indices[i]: i for i in range(len(filtered_indices))}
+        else:
+            # Use all trials without filtering
+            filtered_rewards = rewards
+            filtered_to_orig = {i: i for i in range(len(rewards))}
+            orig_to_filtered = {i: i for i in range(len(rewards))}
+
+        # Skip if session has too few trials
+        if len(filtered_rewards) < 6:  # Need at least 6 trials to determine 5+ loss streak
+            print(f"Skipping {subject_id}/{session_date}, insufficient trials after filtering")
+            continue
+
+        # Find trials that were losses followed by a win in the filtered behavioral data
+        for i in range(len(filtered_rewards) - 1):
+            # Check if current trial is a loss and next is a win
+            if filtered_rewards[i] == 0 and filtered_rewards[i + 1] == 1:
+                # This is a loss trial followed by a win
+                orig_trial_idx = filtered_to_orig[i]
+
+                # Skip if we don't have photometry data for this trial
+                if orig_trial_idx not in all_valid_trials:
+                    continue
+
+                # Get the photometry data for this trial
+                # Find the index in the valid_trials array
+                valid_trial_idx = np.where(np.array(all_valid_trials) == orig_trial_idx)[0]
+                if len(valid_trial_idx) == 0:
+                    # No photometry data for this trial
+                    continue
+
+                photometry_data = all_valid_epoched_data[valid_trial_idx[0]]
+
+                # Now count consecutive losses going backward from current trial
+                loss_streak = 1  # Start with 1 (current trial is a loss)
+
+                if skipped_missed:
+                    # Looking back in filtered space (no missed trials)
+                    for j in range(i - 1, -1, -1):
+                        if filtered_rewards[j] == 0:
+                            loss_streak += 1
+                        else:
+                            # Found a win, streak ends
+                            break
+                else:
+                    # Looking back in original space (can include missed trials)
+                    for j in range(orig_trial_idx - 1, -1, -1):
+                        if j < len(rewards) and rewards[j] == 0:
+                            loss_streak += 1
+                        else:
+                            # Found a win, streak ends
+                            break
+
+                # Categorize the trial based on streak length
+                if loss_streak == 1:
+                    streak_data['1_loss'].append(photometry_data)
+                elif loss_streak == 2:
+                    streak_data['2_loss'].append(photometry_data)
+                elif loss_streak == 3:
+                    streak_data['3_loss'].append(photometry_data)
+                elif loss_streak == 4:
+                    streak_data['4_loss'].append(photometry_data)
+                else:  # 5 or more consecutive losses
+                    streak_data['5plus_loss'].append(photometry_data)
+
+    # Check if we found any valid streaks
+    total_trials = sum(len(data) for data in streak_data.values())
+    if total_trials == 0:
+        print(f"No valid loss streaks found for {subject_id}")
+        return None
+
+    # Convert lists to numpy arrays for each category (if not empty)
+    for category in streak_data:
+        if streak_data[category]:
+            streak_data[category] = np.array(streak_data[category])
+
+    # Calculate averages and SEM for each streak length
+    streak_averages = {}
+    streak_sems = {}
+    for category, data in streak_data.items():
+        if len(data) > 0:
+            streak_averages[category] = np.mean(data, axis=0)
+            streak_sems[category] = calculate_sem(data, axis=0)
+
+    # Create the plot
+    plt.figure(figsize=(12, 7))
+
+    # Define colors and labels with trial counts
+    colors = {
+        '1_loss': 'blue',
+        '2_loss': 'green',
+        '3_loss': 'orange',
+        '4_loss': 'red',
+        '5plus_loss': 'purple'
+    }
+
+    labels = {
+        '1_loss': f"1 Loss (n={len(streak_data['1_loss'])})",
+        '2_loss': f"2 Consecutive Losses (n={len(streak_data['2_loss'])})",
+        '3_loss': f"3 Consecutive Losses (n={len(streak_data['3_loss'])})",
+        '4_loss': f"4 Consecutive Losses (n={len(streak_data['4_loss'])})",
+        '5plus_loss': f"5+ Consecutive Losses (n={len(streak_data['5plus_loss'])})"
+    }
+
+    # Determine which categories to plot based on only_1_5 parameter
+    categories_to_plot = ['1_loss', '5plus_loss'] if only_1_5 else ['1_loss', '2_loss', '3_loss', '4_loss', '5plus_loss']
+
+    # Plot selected streak categories
+    for category in categories_to_plot:
+        if category in streak_averages and len(streak_data[category]) > 0:
+            plt.fill_between(time_axis,
+                             streak_averages[category] - streak_sems[category],
+                             streak_averages[category] + streak_sems[category],
+                             color=colors[category], alpha=0.3)
+            plt.plot(time_axis, streak_averages[category],
+                     color=colors[category], linewidth=2, label=labels[category])
+
+    # Add vertical line at cue onset
+    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+    plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+
+    # Labels and formatting
+    plt.xlabel('Time (s)', fontsize=12)
+    plt.ylabel('ΔF/F', fontsize=12)
+
+    missed_text = "excluding" if skipped_missed else "including"
+    plot_cat_text = "1_and_5" if only_1_5 else "all_cats"
+    plt.title(f'Photometry Signal by Loss Streak Length Before Win: {subject_id} ({missed_text} missed trials)',
+              fontsize=14)
+    plt.xlim([-pre_cue_time, post_cue_time])
+    plt.legend(loc='upper right')
+    plt.tight_layout()
+
+    # Add total trials information
+    displayed_trials = sum(len(streak_data[cat]) for cat in categories_to_plot)
+    plt.figtext(0.02, 0.02, f"Total trials analyzed: {displayed_trials} (of {total_trials})", fontsize=10,
+                bbox=dict(facecolor='white', alpha=0.8))
+
+    # Save the figure
+    save_figure(plt.gcf(), subject_id, "pooled", f"loss_streaks_before_win_{missed_text}_missed_{plot_cat_text}")
+
+    plt.show()
+
+    # Return analysis results
+    return {
+        'subject_id': subject_id,
+        'streak_data': streak_data,
+        'streak_averages': streak_averages,
+        'streak_sems': streak_sems,
+        'time_axis': time_axis,
+        'total_trials': total_trials,
+        'displayed_trials': displayed_trials,
+        'skipped_missed': skipped_missed,
+        'only_1_5': only_1_5
+    }
+
+
+def analyze_loss_trials_signal_quartiles(subject_id, signal_window='pre_cue', plot_verification=True):
+    """
+    Analyze all loss trials and sort them into quartiles based on photometry signal in specified time window.
+    Then determine the percentage of trials in each quartile where the animal switched choice on the next trial.
+
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    signal_window : str, optional (default='pre_cue')
+        Time window to use for calculating average photometry signal:
+        - 'pre_cue': -0.75s to -0.25s before lick (-0.75 to -0.25)
+        - 'early_post': +1s to +2s after lick (1 to 2)
+        - 'late_post': +3s to +5s after lick (3 to 5)
+    plot_verification : bool, optional (default=True)
+        Whether to create verification plots showing the sorted quartiles
+
+    Returns:
+    --------
+    dict: Analysis results including quartile switch rates and plotted data
+    """
+    # Define time windows based on the parameter
+    time_windows = {
+        'pre_cue': (-0.75, -0.25),
+        'early_post': (1.0, 2.0),
+        'late_post': (3.0, 5.0)
+    }
+
+    if signal_window not in time_windows:
+        raise ValueError(f"Invalid signal_window. Choose from: {list(time_windows.keys())}")
+
+    # Get time window bounds
+    window_start, window_end = time_windows[signal_window]
+
+    # Find all session directories for this subject
+    subject_dir = os.path.join(base_dir, subject_id)
+    if not os.path.exists(subject_dir):
+        print(f"Subject directory not found: {subject_dir}")
+        return None
+
+    # Store trial data and corresponding behavior
+    all_loss_trials = []  # Photometry data for all loss trials
+    all_loss_trial_signals = []  # Average signal in window for all loss trials
+    all_next_choices_same = []  # Boolean: True if next choice is the same as current
+    all_next_reward = []  # Reward outcome of next trial
+    time_axis = None  # Will be set from the first valid session
+
+    # Sort sessions chronologically
+    sessions = sorted([d for d in os.listdir(subject_dir)
+                       if os.path.isdir(os.path.join(subject_dir, d)) and
+                       os.path.exists(os.path.join(subject_dir, d, "deltaff.npy"))])
+
+    # Process each session
+    for session_date in sessions:
+        print(f"Processing {subject_id}/{session_date}...")
+        session_result = process_session(subject_id, session_date)
+        if not session_result:
+            continue
+
+        # Store time axis from the first valid session
+        if time_axis is None:
+            time_axis = session_result['time_axis']
+
+        # Get behavioral data
+        behavior_data = session_result['behavioral_data']
+        rewards = np.array(behavior_data['reward'])
+        choices = np.array(behavior_data['choice'])
+
+        # Skip sessions with too few trials
+        if len(rewards) < 2:  # Need at least 2 trials to analyze consecutive choices
+            print(f"Skipping {subject_id}/{session_date}, insufficient trials")
+            continue
+
+        # Filter out missed trials
+        non_miss_mask = choices != 'M'
+        non_miss_rewards = rewards[non_miss_mask]
+        non_miss_choices = choices[non_miss_mask]
+
+        # Create mapping from filtered indices to original indices
+        non_miss_indices = np.where(non_miss_mask)[0]
+        filtered_to_orig = {i: non_miss_indices[i] for i in range(len(non_miss_indices))}
+
+        # Get photometry data for valid trials
+        valid_trials = session_result['valid_trials']
+        epoched_data = session_result['epoched_data'][valid_trials]
+
+        # Find time indices for the specified window
+        window_idx_start = np.where(time_axis >= window_start)[0][0]
+        window_idx_end = np.where(time_axis <= window_end)[0][-1]
+
+        # For each non-missed trial in the session
+        for i in range(len(non_miss_rewards) - 1):  # Exclude the last trial (no next trial)
+            curr_trial_idx = filtered_to_orig[i]
+            next_trial_idx = filtered_to_orig[i + 1]
+
+            # Skip if current trial is not a loss trial
+            if non_miss_rewards[i] != 0:
+                continue
+
+            # Skip if we don't have photometry data for this trial
+            if curr_trial_idx not in valid_trials:
+                continue
+
+            # Get photometry data for this trial
+            valid_idx = np.where(np.array(valid_trials) == curr_trial_idx)[0]
+            if len(valid_idx) == 0:
+                continue
+
+            curr_photometry = epoched_data[valid_idx[0]]
+
+            # Calculate average signal in the specified window
+            window_signal = np.mean(curr_photometry[window_idx_start:window_idx_end])
+
+            # Determine if the next choice is the same as current
+            next_choice_same = (non_miss_choices[i] == non_miss_choices[i + 1])
+
+            # Store the data
+            all_loss_trials.append(curr_photometry)
+            all_loss_trial_signals.append(window_signal)
+            all_next_choices_same.append(next_choice_same)
+            all_next_reward.append(non_miss_rewards[i + 1])
+
+    # Check if we found any valid loss trials
+    if len(all_loss_trials) == 0:
+        print(f"No valid loss trials found for {subject_id}")
+        return None
+
+    # Convert lists to numpy arrays
+    all_loss_trials = np.array(all_loss_trials)
+    all_loss_trial_signals = np.array(all_loss_trial_signals)
+    all_next_choices_same = np.array(all_next_choices_same)
+    all_next_reward = np.array(all_next_reward)
+
+    # Sort trials into quartiles based on signal
+    quartile_labels = pd.qcut(all_loss_trial_signals, 4, labels=False)
+
+    # Calculate switch rate for each quartile (switch = not same)
+    quartile_switch_rates = []
+    quartile_trial_counts = []
+    quartile_next_reward_rates = []
+
+    # Process each quartile
+    for quartile in range(4):
+        quartile_mask = quartile_labels == quartile
+        trials_in_quartile = np.sum(quartile_mask)
+
+        if trials_in_quartile > 0:
+            # Calculate switch rate (% of trials where next choice is different)
+            stay_count = np.sum(all_next_choices_same[quartile_mask])
+            switch_count = trials_in_quartile - stay_count
+            switch_rate = (switch_count / trials_in_quartile) * 100
+
+            # Calculate next reward rate
+            next_reward_rate = (np.sum(all_next_reward[quartile_mask]) / trials_in_quartile) * 100
+
+            quartile_switch_rates.append(switch_rate)
+            quartile_trial_counts.append(trials_in_quartile)
+            quartile_next_reward_rates.append(next_reward_rate)
+        else:
+            quartile_switch_rates.append(0)
+            quartile_trial_counts.append(0)
+            quartile_next_reward_rates.append(0)
+
+    # Print results
+    print(f"\n=== Analysis of Loss Trials by Signal Quartile: {subject_id} ===")
+    print(f"Signal window: {signal_window} ({window_start}s to {window_end}s)")
+    print(f"Total loss trials analyzed: {len(all_loss_trial_signals)}")
+    print("\nChoice Switch Rates by Signal Quartile:")
+    for quartile in range(4):
+        print(f"Quartile {quartile + 1}: {quartile_switch_rates[quartile]:.1f}% switch rate "
+              f"({quartile_trial_counts[quartile]} trials)")
+
+    print("\nNext Trial Reward Rates by Signal Quartile:")
+    for quartile in range(4):
+        print(f"Quartile {quartile + 1}: {quartile_next_reward_rates[quartile]:.1f}% rewarded")
+
+    # Create verification plot if requested
+    if plot_verification:
+        fig = plt.figure(figsize=(15, 10))
+        gs = plt.GridSpec(3, 1, height_ratios=[2, 1, 1], hspace=0.3)
+
+        # Plot average photometry traces by quartile
+        ax1 = fig.add_subplot(gs[0])
+        colors = ['blue', 'green', 'orange', 'red']  # Colors for quartiles
+
+        # Plot each quartile's average trace
+        for quartile in range(4):
+            quartile_mask = quartile_labels == quartile
+            if np.sum(quartile_mask) > 0:
+                quartile_data = all_loss_trials[quartile_mask]
+                quartile_avg = np.mean(quartile_data, axis=0)
+                quartile_sem = calculate_sem(quartile_data, axis=0)
+
+                ax1.fill_between(time_axis,
+                                 quartile_avg - quartile_sem,
+                                 quartile_avg + quartile_sem,
+                                 color=colors[quartile], alpha=0.3)
+                ax1.plot(time_axis, quartile_avg,
+                         color=colors[quartile], linewidth=2,
+                         label=f'Quartile {quartile + 1} (n={quartile_trial_counts[quartile]})')
+
+        # Highlight the time window used for sorting
+        ax1.axvspan(window_start, window_end, color='gray', alpha=0.3, label='Sorting Window')
+
+        # Add reference lines
+        ax1.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+        ax1.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+
+        ax1.set_xlabel('Time (s)', fontsize=12)
+        ax1.set_ylabel('ΔF/F', fontsize=12)
+        ax1.set_title(f'Loss Trials Sorted by {signal_window} Signal: {subject_id}', fontsize=14)
+        ax1.legend(loc='upper right')
+        ax1.set_xlim([-pre_cue_time, post_cue_time])
+
+        # Plot switch rates by quartile
+        ax2 = fig.add_subplot(gs[1])
+        bars = ax2.bar(range(1, 5), quartile_switch_rates, color=colors, alpha=0.7)
+
+        # Add trial counts as text on bars
+        for bar, count in zip(bars, quartile_trial_counts):
+            height = bar.get_height()
+            ax2.text(bar.get_x() + bar.get_width() / 2., height + 2,
+                     f'n={count}', ha='center', va='bottom', fontsize=10)
+
+        ax2.set_xlabel('Signal Quartile', fontsize=12)
+        ax2.set_ylabel('Switch Rate (%)', fontsize=12)
+        ax2.set_title('Percentage of Trials with Choice Switch on Next Trial', fontsize=14)
+        ax2.set_ylim(0, 100)
+        ax2.set_xticks(range(1, 5))
+        ax2.set_xticklabels([f'Q{i + 1}' for i in range(4)])
+        ax2.grid(True, axis='y', alpha=0.3)
+
+        # Plot next trial reward rates by quartile
+        ax3 = fig.add_subplot(gs[2])
+        bars = ax3.bar(range(1, 5), quartile_next_reward_rates, color=colors, alpha=0.7)
+
+        # Add trial counts as text on bars
+        for bar, count in zip(bars, quartile_trial_counts):
+            height = bar.get_height()
+            ax3.text(bar.get_x() + bar.get_width() / 2., height + 2,
+                     f'n={count}', ha='center', va='bottom', fontsize=10)
+
+        ax3.set_xlabel('Signal Quartile', fontsize=12)
+        ax3.set_ylabel('Reward Rate (%)', fontsize=12)
+        ax3.set_title('Percentage of Next Trials that were Rewarded', fontsize=14)
+        ax3.set_ylim(0, 100)
+        ax3.set_xticks(range(1, 5))
+        ax3.set_xticklabels([f'Q{i + 1}' for i in range(4)])
+        ax3.grid(True, axis='y', alpha=0.3)
+
+        plt.tight_layout()
+
+        # Save the figure
+        save_figure(fig, subject_id, "pooled", f"loss_trials_{signal_window}_quartiles")
+
+        plt.show()
+
+    # Return analysis results
+    return {
+        'subject_id': subject_id,
+        'time_axis': time_axis,
+        'signal_window': signal_window,
+        'window_bounds': (window_start, window_end),
+        'all_loss_trials': all_loss_trials,
+        'all_loss_trial_signals': all_loss_trial_signals,
+        'quartile_labels': quartile_labels,
+        'quartile_switch_rates': quartile_switch_rates,
+        'quartile_trial_counts': quartile_trial_counts,
+        'quartile_next_reward_rates': quartile_next_reward_rates
     }
