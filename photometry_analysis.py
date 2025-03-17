@@ -6,6 +6,7 @@ import glob
 import warnings
 import pandas as pd
 import scipy.stats
+from scipy.stats import chi2_contingency, fisher_exact
 
 # Suppress deprecation warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -1466,7 +1467,7 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_
         rewarded_sem = calculate_sem(rewarded_trials, axis=0)
         unrewarded_sem = calculate_sem(unrewarded_trials, axis=0)
 
-        # Compute win-loss difference (keeping original calculation)
+        # Compute win-loss difference
         rewarded_avg = rewarded_avg + np.abs(np.min([rewarded_avg, unrewarded_avg]))
         unrewarded_avg = unrewarded_avg + np.abs(np.min([rewarded_avg, unrewarded_avg]))
         win_loss_diff = rewarded_avg - unrewarded_avg
@@ -1998,188 +1999,6 @@ def analyze_win_stay_lose_switch(subject_id, session_date=None, df=None):
     return wsls_results
 
 
-def analyze_win_loss_difference_heatmap(subject_id):
-    """
-    Create a heatmap visualization of win-loss signal differences across sessions
-
-    Parameters:
-    -----------
-    subject_id : str
-        The identifier for the subject
-
-    Returns:
-    --------
-    dict: Analysis results including win-loss differences across all sessions
-    """
-    # Get all sessions for the subject
-    subject_path = os.path.join(base_dir, subject_id)
-    sessions = sorted([d for d in os.listdir(subject_path)
-                       if os.path.isdir(os.path.join(subject_path, d)) and
-                       os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
-
-    # Store results for each session
-    session_differences = []
-    session_dates = []
-    time_axis = None
-    peak_differences = []
-
-    # Process each session
-    for session_date in sessions:
-        # Process the session
-        session_result = process_session(subject_id, session_date)
-        if not session_result:
-            print(f"Could not process session {subject_id}/{session_date}")
-            continue
-
-        if len(session_result['non_m_trials']) < 100:
-            print(
-                f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
-            continue
-
-        # Filter out missed trials
-        non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
-                                  if idx in session_result["non_m_trials"]])
-
-        # Get reward outcomes and photometry data
-        reward_outcomes = session_result["reward_outcomes"][non_m_indices]
-        session_plots = session_result['plotting_data']
-
-        # Separate rewarded and unrewarded trials
-        rewarded_trials = session_plots[reward_outcomes == 1]
-        unrewarded_trials = session_plots[reward_outcomes == 0]
-
-        if len(rewarded_trials) == 0 or len(unrewarded_trials) == 0:
-            print(f"Skipping {subject_id}/{session_date}, missing reward outcomes.")
-            continue
-
-        # Compute average rewarded and unrewarded signals
-        rewarded_avg = np.mean(rewarded_trials, axis=0)
-        unrewarded_avg = np.mean(unrewarded_trials, axis=0)
-
-        # Compute win-loss difference
-        win_loss_diff = rewarded_avg - unrewarded_avg
-
-        # Store session information
-        session_differences.append(win_loss_diff)
-        session_dates.append(session_date)
-
-        # Store time axis (same for all sessions)
-        if time_axis is None:
-            time_axis = session_result['time_axis']
-
-        # Calculate peak difference (maximum absolute difference in post-cue window)
-        post_cue_indices = time_axis > 0
-        peak_diff = np.max(np.abs(win_loss_diff[post_cue_indices]))
-        peak_differences.append(peak_diff)
-
-    if not session_differences:
-        print(f"No valid sessions found for {subject_id}")
-        return None
-
-    # Convert list to array for easier processing
-    win_loss_array = np.array(session_differences)
-
-    # Create figure for heatmap and peak differences plot
-    fig = plt.figure(figsize=(18, 10))
-    gs = plt.GridSpec(2, 1, height_ratios=[2, 1])
-
-    # Plot heatmap of win-loss differences (top)
-    ax_heatmap = fig.add_subplot(gs[0])
-
-    # Flip the array vertically so that the first session is at the bottom
-    # This makes the chronological order go from bottom (earliest) to top (latest)
-    win_loss_array = np.flipud(win_loss_array)
-    flipped_session_dates = session_dates[::-1]  # Reverse the session dates for y-axis labels
-
-    # Create the heatmap
-    im = ax_heatmap.imshow(win_loss_array,
-                           aspect='auto',
-                           extent=[time_axis[0], time_axis[-1], 0, len(session_differences)],
-                           origin='lower',
-                           cmap='RdBu_r',
-                           interpolation='nearest')
-
-    # Add vertical line at cue onset
-    ax_heatmap.axvline(x=0, color='black', linestyle='--', linewidth=1.5)
-
-    # Labels and formatting
-    ax_heatmap.set_xlabel('Time (s)', fontsize=12)
-    ax_heatmap.set_ylabel('Session Number', fontsize=12)
-    ax_heatmap.set_title(f'Win-Loss Signal Difference Across Sessions: {subject_id}', fontsize=14)
-
-    # Add specific y-tick labels at regular intervals
-    tick_step = max(1, len(session_dates) // 10)  # Show at most 10 session labels
-    y_ticks = np.arange(0.5, len(session_dates), tick_step)
-
-    # Create labels for every tick_step interval
-    # Using flipped_session_dates to match the flipped array orientation
-    y_labels = [flipped_session_dates[i] for i in range(0, len(flipped_session_dates), tick_step)]
-
-    # Add session numbers too for clarity
-    session_numbers = list(range(1, len(session_dates) + 1))[::-1]  # Reverse to match flipped orientation
-    y_label_with_num = [f"{i + 1}: {flipped_session_dates[i]}" for i in range(0, len(flipped_session_dates), tick_step)]
-
-    ax_heatmap.set_yticks(y_ticks)
-    ax_heatmap.set_yticklabels(y_label_with_num)
-
-    # Add colorbar
-    cbar = plt.colorbar(im, ax=ax_heatmap)
-    cbar.set_label('Win-Loss ΔF/F Difference', fontsize=10)
-
-    # Plot peak differences across sessions (bottom)
-    ax_peaks = fig.add_subplot(gs[1])
-
-    # Create x-axis values (session numbers from 1 to n)
-    session_numbers = np.arange(1, len(session_dates) + 1)
-
-    # Create blue gradient for bars
-    blue_colors = plt.cm.Blues(np.linspace(0.3, 1, len(session_dates)))
-
-    # Plot peak differences
-    ax_peaks.bar(session_numbers, peak_differences, color=blue_colors, alpha=0.7)
-
-    # Add trend line
-    if len(peak_differences) > 1:
-        z = np.polyfit(session_numbers, peak_differences, 1)
-        p = np.poly1d(z)
-        ax_peaks.plot(session_numbers, p(session_numbers), 'r--', linewidth=2,
-                      label=f'Trend: {z[0]:.4f}')
-
-        # Add correlation coefficient
-        corr, p_val = scipy.stats.pearsonr(session_numbers, peak_differences)
-        ax_peaks.text(0.05, 0.95, f'r = {corr:.3f}, p = {p_val:.3f}',
-                      transform=ax_peaks.transAxes, fontsize=10,
-                      verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-
-    # Labels and formatting
-    ax_peaks.set_xlabel('Session Number', fontsize=12)
-    ax_peaks.set_ylabel('Peak Win-Loss Difference', fontsize=12)
-    ax_peaks.set_title('Peak Difference Magnitude by Session', fontsize=14)
-    ax_peaks.set_xticks(session_numbers)
-    ax_peaks.set_xticklabels(session_numbers)  # Use session numbers
-    ax_peaks.grid(True, axis='y', alpha=0.3)
-
-    if len(peak_differences) > 1:
-        ax_peaks.legend(loc='upper left')
-
-    # Adjust layout
-    plt.tight_layout()
-
-    # Save figure
-    save_figure(fig, subject_id, "all_sessions", "win_loss_difference_heatmap")
-
-    plt.show()
-
-    # Return analysis results
-    return {
-        'subject_id': subject_id,
-        'session_dates': session_dates,
-        'time_axis': time_axis,
-        'win_loss_differences': session_differences,
-        'peak_differences': peak_differences
-    }
-
-
 def analyze_loss_streaks_before_win(subject_id, skipped_missed=True, only_1_5=False):
     """
     Analyze photometry signals for loss streaks of different lengths that end with a win.
@@ -2412,9 +2231,16 @@ def analyze_loss_streaks_before_win(subject_id, skipped_missed=True, only_1_5=Fa
 
 def analyze_loss_trials_signal_quartiles(subject_id, signal_window='pre_cue', plot_verification=True):
     """
-    Analyze all loss trials and sort them into quartiles based on photometry signal in specified time window.
-    Then determine the percentage of trials in each quartile where the animal switched choice on the next trial.
-
+    Analyze trials based on photometry signal in specified time window and determine choice switching behavior.
+    
+    For post-cue windows ('early_post' and 'late_post'):
+    - Selects current loss trials (T0) and sorts them by signal in the time window
+    - Calculates % of trials where the next choice (T+1) is different from current choice (T0)
+    
+    For pre-cue window ('pre_cue'):
+    - Selects trials that follow a loss (T0 follows T-1 loss) and sorts by pre-cue signal
+    - Calculates % of trials where the current choice (T0) is different from previous choice (T-1)
+    
     Parameters:
     -----------
     subject_id : str
@@ -2426,7 +2252,7 @@ def analyze_loss_trials_signal_quartiles(subject_id, signal_window='pre_cue', pl
         - 'late_post': +3s to +5s after lick (3 to 5)
     plot_verification : bool, optional (default=True)
         Whether to create verification plots showing the sorted quartiles
-
+        
     Returns:
     --------
     dict: Analysis results including quartile switch rates and plotted data
@@ -2435,248 +2261,929 @@ def analyze_loss_trials_signal_quartiles(subject_id, signal_window='pre_cue', pl
     time_windows = {
         'pre_cue': (-0.75, -0.25),
         'early_post': (1.0, 2.0),
-        'late_post': (3.0, 5.0)
+        'late_post': (3.5, 4.5)
     }
-
+    
     if signal_window not in time_windows:
         raise ValueError(f"Invalid signal_window. Choose from: {list(time_windows.keys())}")
-
+        
     # Get time window bounds
     window_start, window_end = time_windows[signal_window]
-
+    
     # Find all session directories for this subject
     subject_dir = os.path.join(base_dir, subject_id)
     if not os.path.exists(subject_dir):
         print(f"Subject directory not found: {subject_dir}")
         return None
-
+    
+    # Determine analysis mode based on time window
+    is_pre_cue_analysis = signal_window == 'pre_cue'
+    
     # Store trial data and corresponding behavior
-    all_loss_trials = []  # Photometry data for all loss trials
-    all_loss_trial_signals = []  # Average signal in window for all loss trials
-    all_next_choices_same = []  # Boolean: True if next choice is the same as current
-    all_next_reward = []  # Reward outcome of next trial
-    time_axis = None  # Will be set from the first valid session
-
+    all_trials_data = []         # Photometry data for all selected trials
+    all_trial_signals = []       # Average signal in window for selected trials
+    all_choice_switches = []     # Boolean: True if switch in choice
+    all_next_reward = []         # Boolean: True if next trial rewarded 
+    time_axis = None             # Will be set from the first valid session
+    
     # Sort sessions chronologically
     sessions = sorted([d for d in os.listdir(subject_dir)
                        if os.path.isdir(os.path.join(subject_dir, d)) and
                        os.path.exists(os.path.join(subject_dir, d, "deltaff.npy"))])
-
+    
     # Process each session
     for session_date in sessions:
         print(f"Processing {subject_id}/{session_date}...")
         session_result = process_session(subject_id, session_date)
         if not session_result:
             continue
-
+            
         # Store time axis from the first valid session
         if time_axis is None:
             time_axis = session_result['time_axis']
-
+            
         # Get behavioral data
         behavior_data = session_result['behavioral_data']
         rewards = np.array(behavior_data['reward'])
         choices = np.array(behavior_data['choice'])
-
+        
         # Skip sessions with too few trials
-        if len(rewards) < 2:  # Need at least 2 trials to analyze consecutive choices
+        min_required = 3  # Need at least 3 trials for a meaningful analysis
+        if len(rewards) < min_required:
             print(f"Skipping {subject_id}/{session_date}, insufficient trials")
             continue
-
+            
         # Filter out missed trials
         non_miss_mask = choices != 'M'
         non_miss_rewards = rewards[non_miss_mask]
         non_miss_choices = choices[non_miss_mask]
-
+        
         # Create mapping from filtered indices to original indices
         non_miss_indices = np.where(non_miss_mask)[0]
         filtered_to_orig = {i: non_miss_indices[i] for i in range(len(non_miss_indices))}
-
+        
         # Get photometry data for valid trials
         valid_trials = session_result['valid_trials']
         epoched_data = session_result['epoched_data'][valid_trials]
-
+        
         # Find time indices for the specified window
         window_idx_start = np.where(time_axis >= window_start)[0][0]
         window_idx_end = np.where(time_axis <= window_end)[0][-1]
-
-        # For each non-missed trial in the session
-        for i in range(len(non_miss_rewards) - 1):  # Exclude the last trial (no next trial)
-            curr_trial_idx = filtered_to_orig[i]
-            next_trial_idx = filtered_to_orig[i + 1]
-
-            # Skip if current trial is not a loss trial
-            if non_miss_rewards[i] != 0:
-                continue
-
-            # Skip if we don't have photometry data for this trial
-            if curr_trial_idx not in valid_trials:
-                continue
-
-            # Get photometry data for this trial
-            valid_idx = np.where(np.array(valid_trials) == curr_trial_idx)[0]
-            if len(valid_idx) == 0:
-                continue
-
-            curr_photometry = epoched_data[valid_idx[0]]
-
-            # Calculate average signal in the specified window
-            window_signal = np.mean(curr_photometry[window_idx_start:window_idx_end])
-
-            # Determine if the next choice is the same as current
-            next_choice_same = (non_miss_choices[i] == non_miss_choices[i + 1])
-
-            # Store the data
-            all_loss_trials.append(curr_photometry)
-            all_loss_trial_signals.append(window_signal)
-            all_next_choices_same.append(next_choice_same)
-            all_next_reward.append(non_miss_rewards[i + 1])
-
-    # Check if we found any valid loss trials
-    if len(all_loss_trials) == 0:
-        print(f"No valid loss trials found for {subject_id}")
+        
+        if is_pre_cue_analysis:
+            # PRE-CUE ANALYSIS MODE
+            # Look at trials AFTER a loss and analyze if the choice switched from the previous trial
+            
+            for i in range(1, len(non_miss_rewards)):  # Start from second trial
+                prev_trial_idx = i - 1
+                curr_trial_idx = i
+                
+                # Check if previous trial was a loss
+                if non_miss_rewards[prev_trial_idx] != 0:
+                    continue
+                    
+                # We found a trial that follows a loss
+                orig_curr_idx = filtered_to_orig[curr_trial_idx]
+                
+                # Skip if we don't have photometry data for this trial
+                if orig_curr_idx not in valid_trials:
+                    continue
+                    
+                # Get photometry data for this trial
+                valid_idx = np.where(np.array(valid_trials) == orig_curr_idx)[0]
+                if len(valid_idx) == 0:
+                    continue
+                    
+                curr_photometry = epoched_data[valid_idx[0]]
+                
+                # Calculate average signal in the specified window
+                window_signal = np.mean(curr_photometry[window_idx_start:window_idx_end])
+                
+                # Determine if the current choice is different from previous (switched)
+                choice_switched = (non_miss_choices[prev_trial_idx] != non_miss_choices[curr_trial_idx])
+                
+                # Store the data
+                all_trials_data.append(curr_photometry)
+                all_trial_signals.append(window_signal)
+                all_choice_switches.append(choice_switched)
+                all_next_reward.append(non_miss_rewards[curr_trial_idx])  # Current trial's reward outcome
+                
+        else:
+            # POST-CUE ANALYSIS MODE (original behavior)
+            # Look at current loss trials and analyze if the next choice switches
+            
+            for i in range(len(non_miss_rewards) - 1):  # Exclude the last trial (no next trial)
+                curr_trial_idx = i
+                next_trial_idx = i + 1
+                
+                # Skip if current trial is not a loss trial
+                if non_miss_rewards[curr_trial_idx] != 0:
+                    continue
+                    
+                # We found a loss trial
+                orig_curr_idx = filtered_to_orig[curr_trial_idx]
+                
+                # Skip if we don't have photometry data for this trial
+                if orig_curr_idx not in valid_trials:
+                    continue
+                    
+                # Get photometry data for this trial
+                valid_idx = np.where(np.array(valid_trials) == orig_curr_idx)[0]
+                if len(valid_idx) == 0:
+                    continue
+                    
+                curr_photometry = epoched_data[valid_idx[0]]
+                
+                # Calculate average signal in the specified window
+                window_signal = np.mean(curr_photometry[window_idx_start:window_idx_end])
+                
+                # Determine if the next choice is different from current (switched)
+                choice_switched = (non_miss_choices[curr_trial_idx] != non_miss_choices[next_trial_idx])
+                
+                # Store the data
+                all_trials_data.append(curr_photometry)
+                all_trial_signals.append(window_signal)
+                all_choice_switches.append(choice_switched)
+                all_next_reward.append(non_miss_rewards[next_trial_idx])  # Next trial's reward outcome
+    
+    # Check if we found any valid trials
+    if len(all_trials_data) == 0:
+        print(f"No valid trials found for analysis ({signal_window}) for {subject_id}")
         return None
-
+        
     # Convert lists to numpy arrays
-    all_loss_trials = np.array(all_loss_trials)
-    all_loss_trial_signals = np.array(all_loss_trial_signals)
-    all_next_choices_same = np.array(all_next_choices_same)
+    all_trials_data = np.array(all_trials_data)
+    all_trial_signals = np.array(all_trial_signals)
+    all_choice_switches = np.array(all_choice_switches)
     all_next_reward = np.array(all_next_reward)
-
+    
     # Sort trials into quartiles based on signal
-    quartile_labels = pd.qcut(all_loss_trial_signals, 4, labels=False)
-
-    # Calculate switch rate for each quartile (switch = not same)
+    quartile_labels = pd.qcut(all_trial_signals, 4, labels=False)
+    
+    # Calculate switch rate for each quartile
     quartile_switch_rates = []
     quartile_trial_counts = []
-    quartile_next_reward_rates = []
-
+    quartile_reward_rates = []
+    
     # Process each quartile
     for quartile in range(4):
         quartile_mask = quartile_labels == quartile
         trials_in_quartile = np.sum(quartile_mask)
-
+        
         if trials_in_quartile > 0:
-            # Calculate switch rate (% of trials where next choice is different)
-            stay_count = np.sum(all_next_choices_same[quartile_mask])
-            switch_count = trials_in_quartile - stay_count
+            # Calculate switch rate (% of trials where choice switched)
+            switch_count = np.sum(all_choice_switches[quartile_mask])
             switch_rate = (switch_count / trials_in_quartile) * 100
-
-            # Calculate next reward rate
-            next_reward_rate = (np.sum(all_next_reward[quartile_mask]) / trials_in_quartile) * 100
-
+            
+            # Calculate reward rate for the relevant trial
+            reward_rate = (np.sum(all_next_reward[quartile_mask]) / trials_in_quartile) * 100
+            
             quartile_switch_rates.append(switch_rate)
             quartile_trial_counts.append(trials_in_quartile)
-            quartile_next_reward_rates.append(next_reward_rate)
+            quartile_reward_rates.append(reward_rate)
         else:
             quartile_switch_rates.append(0)
             quartile_trial_counts.append(0)
-            quartile_next_reward_rates.append(0)
-
+            quartile_reward_rates.append(0)
+            
     # Print results
-    print(f"\n=== Analysis of Loss Trials by Signal Quartile: {subject_id} ===")
-    print(f"Signal window: {signal_window} ({window_start}s to {window_end}s)")
-    print(f"Total loss trials analyzed: {len(all_loss_trial_signals)}")
-    print("\nChoice Switch Rates by Signal Quartile:")
+    print(f"\n=== Analysis of {signal_window} Signal Quartiles: {subject_id} ===")
+    print(f"Time window: ({window_start}s to {window_end}s)")
+    print(f"Total trials analyzed: {len(all_trial_signals)}")
+    
+    if is_pre_cue_analysis:
+        print("\nChoice Switch Rates by Pre-Cue Signal Quartile:")
+        print("(% where T0 choice differs from previous T-1 loss trial)")
+    else:
+        print("\nChoice Switch Rates by Post-Cue Signal Quartile:")
+        print("(% where next T+1 choice differs from current T0 loss trial)")
+        
     for quartile in range(4):
         print(f"Quartile {quartile + 1}: {quartile_switch_rates[quartile]:.1f}% switch rate "
               f"({quartile_trial_counts[quartile]} trials)")
-
-    print("\nNext Trial Reward Rates by Signal Quartile:")
+              
+    print("\nReward Rates by Signal Quartile:")
     for quartile in range(4):
-        print(f"Quartile {quartile + 1}: {quartile_next_reward_rates[quartile]:.1f}% rewarded")
-
+        print(f"Quartile {quartile + 1}: {quartile_reward_rates[quartile]:.1f}% rewarded")
+        
     # Create verification plot if requested
     if plot_verification:
         fig = plt.figure(figsize=(15, 10))
         gs = plt.GridSpec(3, 1, height_ratios=[2, 1, 1], hspace=0.3)
-
+        
         # Plot average photometry traces by quartile
         ax1 = fig.add_subplot(gs[0])
         colors = ['blue', 'green', 'orange', 'red']  # Colors for quartiles
-
+        
         # Plot each quartile's average trace
         for quartile in range(4):
             quartile_mask = quartile_labels == quartile
             if np.sum(quartile_mask) > 0:
-                quartile_data = all_loss_trials[quartile_mask]
+                quartile_data = all_trials_data[quartile_mask]
                 quartile_avg = np.mean(quartile_data, axis=0)
                 quartile_sem = calculate_sem(quartile_data, axis=0)
-
+                
                 ax1.fill_between(time_axis,
-                                 quartile_avg - quartile_sem,
-                                 quartile_avg + quartile_sem,
-                                 color=colors[quartile], alpha=0.3)
+                               quartile_avg - quartile_sem,
+                               quartile_avg + quartile_sem,
+                               color=colors[quartile], alpha=0.3)
                 ax1.plot(time_axis, quartile_avg,
-                         color=colors[quartile], linewidth=2,
-                         label=f'Quartile {quartile + 1} (n={quartile_trial_counts[quartile]})')
-
+                       color=colors[quartile], linewidth=2,
+                       label=f'Quartile {quartile+1} (n={quartile_trial_counts[quartile]})')
+                       
         # Highlight the time window used for sorting
         ax1.axvspan(window_start, window_end, color='gray', alpha=0.3, label='Sorting Window')
-
+        
         # Add reference lines
         ax1.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
         ax1.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
-
+        
         ax1.set_xlabel('Time (s)', fontsize=12)
         ax1.set_ylabel('ΔF/F', fontsize=12)
-        ax1.set_title(f'Loss Trials Sorted by {signal_window} Signal: {subject_id}', fontsize=14)
+        
+        if is_pre_cue_analysis:
+            ax1.set_title(f'Trials After Loss Sorted by Pre-Cue Signal: {subject_id}', fontsize=14)
+        else:
+            ax1.set_title(f'Loss Trials Sorted by {signal_window} Signal: {subject_id}', fontsize=14)
+            
         ax1.legend(loc='upper right')
         ax1.set_xlim([-pre_cue_time, post_cue_time])
-
+        
         # Plot switch rates by quartile
         ax2 = fig.add_subplot(gs[1])
         bars = ax2.bar(range(1, 5), quartile_switch_rates, color=colors, alpha=0.7)
-
+        
         # Add trial counts as text on bars
         for bar, count in zip(bars, quartile_trial_counts):
             height = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width() / 2., height + 2,
-                     f'n={count}', ha='center', va='bottom', fontsize=10)
-
+            ax2.text(bar.get_x() + bar.get_width()/2., height + 2,
+                   f'n={count}', ha='center', va='bottom', fontsize=10)
+                   
         ax2.set_xlabel('Signal Quartile', fontsize=12)
         ax2.set_ylabel('Switch Rate (%)', fontsize=12)
-        ax2.set_title('Percentage of Trials with Choice Switch on Next Trial', fontsize=14)
+        
+        if is_pre_cue_analysis:
+            ax2.set_title('% Trials Where Choice Switched From Previous Loss Trial', fontsize=14)
+        else:
+            ax2.set_title('% Trials Where Choice Switched on Next Trial', fontsize=14)
+            
         ax2.set_ylim(0, 100)
         ax2.set_xticks(range(1, 5))
-        ax2.set_xticklabels([f'Q{i + 1}' for i in range(4)])
+        ax2.set_xticklabels([f'Q{i+1}' for i in range(4)])
         ax2.grid(True, axis='y', alpha=0.3)
-
-        # Plot next trial reward rates by quartile
+        
+        # Plot reward rates by quartile
         ax3 = fig.add_subplot(gs[2])
-        bars = ax3.bar(range(1, 5), quartile_next_reward_rates, color=colors, alpha=0.7)
-
+        bars = ax3.bar(range(1, 5), quartile_reward_rates, color=colors, alpha=0.7)
+        
         # Add trial counts as text on bars
         for bar, count in zip(bars, quartile_trial_counts):
             height = bar.get_height()
-            ax3.text(bar.get_x() + bar.get_width() / 2., height + 2,
-                     f'n={count}', ha='center', va='bottom', fontsize=10)
-
+            ax3.text(bar.get_x() + bar.get_width()/2., height + 2,
+                   f'n={count}', ha='center', va='bottom', fontsize=10)
+                   
         ax3.set_xlabel('Signal Quartile', fontsize=12)
         ax3.set_ylabel('Reward Rate (%)', fontsize=12)
-        ax3.set_title('Percentage of Next Trials that were Rewarded', fontsize=14)
+        
+        if is_pre_cue_analysis:
+            ax3.set_title('% Trials That Were Rewarded', fontsize=14)
+        else:
+            ax3.set_title('% Next Trials That Were Rewarded', fontsize=14)
+            
         ax3.set_ylim(0, 100)
         ax3.set_xticks(range(1, 5))
-        ax3.set_xticklabels([f'Q{i + 1}' for i in range(4)])
+        ax3.set_xticklabels([f'Q{i+1}' for i in range(4)])
         ax3.grid(True, axis='y', alpha=0.3)
-
+        
         plt.tight_layout()
-
+        
         # Save the figure
-        save_figure(fig, subject_id, "pooled", f"loss_trials_{signal_window}_quartiles")
-
+        mode_suffix = "after_loss" if is_pre_cue_analysis else "loss_trials"
+        save_figure(fig, subject_id, "pooled", f"{mode_suffix}_{signal_window}_quartiles")
+        
         plt.show()
 
+    if len(all_trial_signals) >= 100:  # Only perform stats with sufficient data
+        add_statistical_test(subject_id, quartile_labels, all_choice_switches,
+                             quartile_trial_counts, quartile_switch_rates)
+        
     # Return analysis results
     return {
         'subject_id': subject_id,
         'time_axis': time_axis,
         'signal_window': signal_window,
         'window_bounds': (window_start, window_end),
-        'all_loss_trials': all_loss_trials,
-        'all_loss_trial_signals': all_loss_trial_signals,
+        'all_trials_data': all_trials_data,
+        'all_trial_signals': all_trial_signals,
         'quartile_labels': quartile_labels,
         'quartile_switch_rates': quartile_switch_rates,
         'quartile_trial_counts': quartile_trial_counts,
-        'quartile_next_reward_rates': quartile_next_reward_rates
+        'quartile_reward_rates': quartile_reward_rates,
+        'is_pre_cue_analysis': is_pre_cue_analysis
     }
+
+
+def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False):
+    """
+    Create a heatmap visualization of win-loss signal differences across sessions
+
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    comp_conf : bool, optional (default=False)
+        If True, sorts sessions by computer confidence rather than chronologically
+
+    Returns:
+    --------
+    dict: Analysis results including win-loss differences across all sessions
+    """
+    # Get all sessions for the subject
+    subject_path = os.path.join(base_dir, subject_id)
+    sessions = sorted([d for d in os.listdir(subject_path)
+                       if os.path.isdir(os.path.join(subject_path, d)) and
+                       os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+
+    # Store results for each session
+    session_differences = []
+    session_dates = []
+    time_axis = None
+    peak_differences = []
+    session_confidences = {}
+
+    # Load parquet data for confidence calculations if needed
+    if comp_conf:
+        try:
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)  # Ensure date is a string
+            print(f"Loaded parquet data for confidence calculations")
+        except Exception as e:
+            print(f"Error loading parquet data: {e}")
+            comp_conf = False  # Fallback to chronological sorting
+
+    # Process each session
+    for session_date in sessions:
+        # Process the session
+        session_result = process_session(subject_id, session_date)
+        if not session_result:
+            print(f"Could not process session {subject_id}/{session_date}")
+            continue
+
+        if len(session_result['non_m_trials']) < 100:
+            print(
+                f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
+            continue
+
+        # Filter out missed trials
+        non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
+                                  if idx in session_result["non_m_trials"]])
+
+        # Get reward outcomes and photometry data
+        reward_outcomes = session_result["reward_outcomes"][non_m_indices]
+        session_plots = session_result['plotting_data']
+
+        # Separate rewarded and unrewarded trials
+        rewarded_trials = session_plots[reward_outcomes == 1]
+        unrewarded_trials = session_plots[reward_outcomes == 0]
+
+        if len(rewarded_trials) == 0 or len(unrewarded_trials) == 0:
+            print(f"Skipping {subject_id}/{session_date}, missing reward outcomes.")
+            continue
+
+        # Compute average rewarded and unrewarded signals
+        rewarded_avg = np.mean(rewarded_trials, axis=0)
+        unrewarded_avg = np.mean(unrewarded_trials, axis=0)
+
+        rewarded_avg = rewarded_avg + np.abs(np.min([rewarded_avg, unrewarded_avg]))
+        unrewarded_avg = unrewarded_avg + np.abs(np.min([rewarded_avg, unrewarded_avg]))
+
+        # Compute win-loss difference
+        win_loss_diff = rewarded_avg - unrewarded_avg
+
+        # Store session information
+        session_differences.append(win_loss_diff)
+        session_dates.append(session_date)
+
+        # Store time axis (same for all sessions)
+        if time_axis is None:
+            time_axis = session_result['time_axis']
+
+        # Calculate peak difference (maximum absolute difference in post-cue window)
+        post_cue_indices = time_axis > 0
+        peak_diff = np.max(np.abs(win_loss_diff[post_cue_indices]))
+        peak_differences.append(peak_diff)
+        
+        # Calculate computer confidence if requested
+        if comp_conf:
+            try:
+                # Get data for this session
+                session_df = df[(df['subjid'] == subject_id) & (df['date'] == session_date) & (df["ignore"] == 0)]
+                
+                if not session_df.empty and 'min_pvalue' in session_df.columns:
+                    # Extract p-values
+                    p_values = session_df['min_pvalue'].values
+                    
+                    # Remove NaN values
+                    p_values = p_values[~np.isnan(p_values)]
+                    
+                    if len(p_values) > 0:
+                        # Cap very small p-values at 10^-12 to avoid infinite confidence
+                        min_p_value = 1e-12
+                        p_values = np.maximum(p_values, min_p_value)
+                        
+                        # Calculate confidence as -log10(p_value)
+                        confidence = -np.log10(p_values)
+                        
+                        # Calculate average confidence for the session
+                        avg_confidence = np.mean(confidence)
+                        session_confidences[session_date] = avg_confidence
+                        print(f"Session {session_date} average confidence: {avg_confidence:.4f}")
+                else:
+                    print(f"No min_pvalue data found for {subject_id}/{session_date}")
+                    
+            except Exception as e:
+                print(f"Error calculating confidence for {subject_id}/{session_date}: {e}")
+
+    if not session_differences:
+        print(f"No valid sessions found for {subject_id}")
+        return None
+
+    # Sort sessions based on confidence or chronologically
+    if comp_conf and session_confidences:
+        # Filter out sessions without confidence values
+        valid_sessions = [s for s in session_dates if s in session_confidences]
+        
+        if len(valid_sessions) < len(session_dates):
+            print(f"Warning: Only {len(valid_sessions)} of {len(session_dates)} sessions have confidence values")
+        
+        if not valid_sessions:
+            print("No sessions with valid confidence values found, using chronological sorting")
+            sorted_indices = list(range(len(session_dates)))
+        else:
+            # Create mapping from session date to index
+            date_to_idx = {date: idx for idx, date in enumerate(session_dates)}
+            
+            # Sort sessions by confidence (highest first)
+            sorted_session_dates = sorted(valid_sessions, key=lambda s: session_confidences.get(s, 0), reverse=True)
+            
+            # Get indices in the original data
+            sorted_indices = [date_to_idx[date] for date in sorted_session_dates]
+            
+            # Print the confidence ranking
+            print("\nSessions ranked by computer confidence (highest to lowest):")
+            for i, sess in enumerate(sorted_session_dates):
+                print(f"{i+1}. Session {sess}: {session_confidences[sess]:.4f}")
+    else:
+        # Use chronological sorting (default)
+        sorted_indices = list(range(len(session_dates)))
+
+    # Reorder arrays based on sorted indices
+    session_differences = [session_differences[i] for i in sorted_indices]
+    session_dates = [session_dates[i] for i in sorted_indices]
+    peak_differences = [peak_differences[i] for i in sorted_indices]
+
+    # Convert to array for heatmap
+    win_loss_array = np.array(session_differences)
+
+    # Create figure for heatmap and peak differences plot
+    fig = plt.figure(figsize=(18, 10))
+    gs = plt.GridSpec(2, 1, height_ratios=[2, 1])
+
+    # Plot heatmap of win-loss differences (top)
+    ax_heatmap = fig.add_subplot(gs[0])
+
+    # Flip the array vertically for display (earliest/lowest confidence at bottom)
+    win_loss_array = np.flipud(win_loss_array)
+    flipped_session_dates = session_dates[::-1]  # Reverse the session dates for y-axis labels
+
+    # Create the heatmap
+    im = ax_heatmap.imshow(win_loss_array,
+                           aspect='auto',
+                           extent=[time_axis[0], time_axis[-1], 0, len(session_differences)],
+                           origin='lower',
+                           cmap='RdBu_r',
+                           interpolation='nearest')
+
+    # Add vertical line at cue onset
+    ax_heatmap.axvline(x=0, color='black', linestyle='--', linewidth=1.5)
+
+    # Labels and formatting
+    sort_type = "Computer Confidence" if comp_conf else "Chronological (oldest first)"
+    ax_heatmap.set_xlabel('Time (s)', fontsize=12)
+    ax_heatmap.set_ylabel('Session', fontsize=12)
+    ax_heatmap.set_title(f'Win-Loss Signal Difference Across Sessions: {subject_id} (sorted by {sort_type})', fontsize=14)
+
+    # Add specific y-tick labels at regular intervals
+    tick_step = max(1, len(session_dates) // 10)  # Show at most 10 session labels
+    y_ticks = np.arange(0.5, len(session_dates), tick_step)
+
+    # Create labels for every tick_step interval
+    y_label_with_num = []
+    for i in range(0, len(flipped_session_dates), tick_step):
+        if comp_conf and flipped_session_dates[i] in session_confidences:
+            y_label_with_num.append(f"{i+1}: {flipped_session_dates[i]} (conf: {session_confidences[flipped_session_dates[i]]:.2f})")
+        else:
+            y_label_with_num.append(f"{i+1}: {flipped_session_dates[i]}")
+
+    ax_heatmap.set_yticks(y_ticks)
+    ax_heatmap.set_yticklabels(y_label_with_num)
+
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax_heatmap)
+    cbar.set_label('Win-Loss ΔF/F Difference', fontsize=10)
+
+    # Plot peak differences across sessions (bottom)
+    ax_peaks = fig.add_subplot(gs[1])
+
+    # Create x-axis values (session numbers from 1 to n)
+    session_numbers = np.arange(1, len(session_dates) + 1)
+
+    # Create blue gradient for bars
+    blue_colors = plt.cm.Blues(np.linspace(0.3, 1, len(session_dates)))
+
+    # Plot peak differences
+    ax_peaks.bar(session_numbers, peak_differences, color=blue_colors, alpha=0.7)
+
+    # Add trend line
+    if len(peak_differences) > 1:
+        z = np.polyfit(session_numbers, peak_differences, 1)
+        p = np.poly1d(z)
+        ax_peaks.plot(session_numbers, p(session_numbers), 'r--', linewidth=2,
+                      label=f'Trend: {z[0]:.4f}')
+
+        # Add correlation coefficient
+        corr, p_val = scipy.stats.pearsonr(session_numbers, peak_differences)
+        ax_peaks.text(0.05, 0.95, f'r = {corr:.3f}, p = {p_val:.3f}',
+                      transform=ax_peaks.transAxes, fontsize=10,
+                      verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    # Labels and formatting
+    ax_peaks.set_xlabel('Session Number', fontsize=12)
+    ax_peaks.set_ylabel('Peak Win-Loss Difference', fontsize=12)
+    ax_peaks.set_title('Peak Difference Magnitude by Session', fontsize=14)
+    ax_peaks.set_xticks(session_numbers)
+    ax_peaks.set_xticklabels(session_numbers)  # Use session numbers
+    ax_peaks.grid(True, axis='y', alpha=0.3)
+
+    if len(peak_differences) > 1:
+        ax_peaks.legend(loc='upper left')
+
+    # Adjust layout
+    plt.tight_layout()
+
+    # Save figure
+    sort_suffix = "by_comp_conf" if comp_conf else "chronological"
+    save_figure(fig, subject_id, "all_sessions", f"win_loss_difference_heatmap_{sort_suffix}")
+
+    plt.show()
+
+    # Return analysis results
+    return {
+        'subject_id': subject_id,
+        'session_dates': session_dates,
+        'time_axis': time_axis,
+        'win_loss_differences': session_differences,
+        'peak_differences': peak_differences,
+        'session_confidences': session_confidences if comp_conf else None
+    }
+
+
+def analyze_session_average_heatmap(subject_id, comp_conf=False):
+    """
+    Create a heatmap visualization of average photometry signals across sessions
+
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    comp_conf : bool, optional (default=False)
+        If True, sorts sessions by computer confidence rather than chronologically
+
+    Returns:
+    --------
+    dict: Analysis results including average signals across all sessions
+    """
+    # Get all sessions for the subject
+    subject_path = os.path.join(base_dir, subject_id)
+    sessions = sorted([d for d in os.listdir(subject_path)
+                       if os.path.isdir(os.path.join(subject_path, d)) and
+                       os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+
+    # Store results for each session
+    session_averages = []
+    session_dates = []
+    time_axis = None
+    peak_averages = []
+    session_confidences = {}
+
+    # Load parquet data for confidence calculations if needed
+    if comp_conf:
+        try:
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)  # Ensure date is a string
+            print(f"Loaded parquet data for confidence calculations")
+        except Exception as e:
+            print(f"Error loading parquet data: {e}")
+            comp_conf = False  # Fallback to chronological sorting
+
+    # Process each session
+    for session_date in sessions:
+        # Process the session
+        session_result = process_session(subject_id, session_date)
+        if not session_result:
+            print(f"Could not process session {subject_id}/{session_date}")
+            continue
+
+        if len(session_result['non_m_trials']) < 100:
+            print(
+                f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
+            continue
+
+        # Get photometry data from all non-missed trials
+        non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
+                                  if idx in session_result["non_m_trials"]])
+        session_plots = session_result['plotting_data']
+
+        if len(session_plots) == 0:
+            print(f"Skipping {subject_id}/{session_date}, no photometry data.")
+            continue
+
+        # Compute average signal across all trials
+        session_avg = np.mean(session_plots, axis=0)
+
+        # Store session information
+        session_averages.append(session_avg)
+        session_dates.append(session_date)
+
+        # Store time axis (same for all sessions)
+        if time_axis is None:
+            time_axis = session_result['time_axis']
+
+        # Calculate peak average (maximum signal in post-cue window)
+        post_cue_indices = time_axis > 0
+        peak_avg = np.max(session_avg[post_cue_indices])
+        peak_averages.append(peak_avg)
+        
+        # Calculate computer confidence if requested
+        if comp_conf:
+            try:
+                # Get data for this session
+                session_df = df[(df['subjid'] == subject_id) & (df['date'] == session_date) & (df["ignore"] == 0)]
+                
+                if not session_df.empty and 'min_pvalue' in session_df.columns:
+                    # Extract p-values
+                    p_values = session_df['min_pvalue'].values
+                    
+                    # Remove NaN values
+                    p_values = p_values[~np.isnan(p_values)]
+                    
+                    if len(p_values) > 0:
+                        # Cap very small p-values at 10^-12 to avoid infinite confidence
+                        min_p_value = 1e-12
+                        p_values = np.maximum(p_values, min_p_value)
+                        
+                        # Calculate confidence as -log10(p_value)
+                        confidence = -np.log10(p_values)
+                        
+                        # Calculate average confidence for the session
+                        avg_confidence = np.mean(confidence)
+                        session_confidences[session_date] = avg_confidence
+                        print(f"Session {session_date} average confidence: {avg_confidence:.4f}")
+                else:
+                    print(f"No min_pvalue data found for {subject_id}/{session_date}")
+                    
+            except Exception as e:
+                print(f"Error calculating confidence for {subject_id}/{session_date}: {e}")
+
+    if not session_averages:
+        print(f"No valid sessions found for {subject_id}")
+        return None
+
+    # Sort sessions based on confidence or chronologically
+    if comp_conf and session_confidences:
+        # Filter out sessions without confidence values
+        valid_sessions = [s for s in session_dates if s in session_confidences]
+        
+        if len(valid_sessions) < len(session_dates):
+            print(f"Warning: Only {len(valid_sessions)} of {len(session_dates)} sessions have confidence values")
+        
+        if not valid_sessions:
+            print("No sessions with valid confidence values found, using chronological sorting")
+            sorted_indices = list(range(len(session_dates)))
+        else:
+            # Create mapping from session date to index
+            date_to_idx = {date: idx for idx, date in enumerate(session_dates)}
+            
+            # Sort sessions by confidence (highest first)
+            sorted_session_dates = sorted(valid_sessions, key=lambda s: session_confidences.get(s, 0), reverse=True)
+            
+            # Get indices in the original data
+            sorted_indices = [date_to_idx[date] for date in sorted_session_dates]
+            
+            # Print the confidence ranking
+            print("\nSessions ranked by computer confidence (highest to lowest):")
+            for i, sess in enumerate(sorted_session_dates):
+                print(f"{i+1}. Session {sess}: {session_confidences[sess]:.4f}")
+    else:
+        # Use chronological sorting (default)
+        sorted_indices = list(range(len(session_dates)))
+
+    # Reorder arrays based on sorted indices
+    session_averages = [session_averages[i] for i in sorted_indices]
+    session_dates = [session_dates[i] for i in sorted_indices]
+    peak_averages = [peak_averages[i] for i in sorted_indices]
+
+    # Convert to array for heatmap
+    avg_signal_array = np.array(session_averages)
+
+    # Create figure for heatmap and peak averages plot
+    fig = plt.figure(figsize=(18, 10))
+    gs = plt.GridSpec(2, 1, height_ratios=[2, 1])
+
+    # Plot heatmap of average signals (top)
+    ax_heatmap = fig.add_subplot(gs[0])
+
+    # Flip the array vertically for display (earliest/lowest confidence at bottom)
+    avg_signal_array = np.flipud(avg_signal_array)
+    flipped_session_dates = session_dates[::-1]  # Reverse the session dates for y-axis labels
+
+    # Create the heatmap with blue-to-yellow-to-white colormap
+    im = ax_heatmap.imshow(avg_signal_array,
+                           aspect='auto',
+                           extent=[time_axis[0], time_axis[-1], 0, len(session_averages)],
+                           origin='lower',
+                           cmap='viridis',  # blue-low, yellow/white-high
+                           interpolation='nearest')
+
+    # Add vertical line at cue onset
+    ax_heatmap.axvline(x=0, color='black', linestyle='--', linewidth=1.5)
+
+    # Labels and formatting
+    sort_type = "Computer Confidence" if comp_conf else "Chronological (oldest first)"
+    ax_heatmap.set_xlabel('Time (s)', fontsize=12)
+    ax_heatmap.set_ylabel('Session', fontsize=12)
+    ax_heatmap.set_title(f'Average Photometry Signal Across Sessions: {subject_id} (sorted by {sort_type})', fontsize=14)
+
+    # Add specific y-tick labels at regular intervals
+    tick_step = max(1, len(session_dates) // 10)  # Show at most 10 session labels
+    y_ticks = np.arange(0.5, len(session_dates), tick_step)
+
+    # Create labels for every tick_step interval
+    y_label_with_num = []
+    for i in range(0, len(flipped_session_dates), tick_step):
+        if comp_conf and flipped_session_dates[i] in session_confidences:
+            y_label_with_num.append(f"{i+1}: {flipped_session_dates[i]} (conf: {session_confidences[flipped_session_dates[i]]:.2f})")
+        else:
+            y_label_with_num.append(f"{i+1}: {flipped_session_dates[i]}")
+
+    ax_heatmap.set_yticks(y_ticks)
+    ax_heatmap.set_yticklabels(y_label_with_num)
+
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax_heatmap)
+    cbar.set_label('ΔF/F', fontsize=10)
+
+    # Plot peak averages across sessions (bottom)
+    ax_peaks = fig.add_subplot(gs[1])
+
+    # Create x-axis values (session numbers from 1 to n)
+    session_numbers = np.arange(1, len(session_dates) + 1)
+
+    # Create gradient colors for bars based on peak values
+    norm = plt.Normalize(min(peak_averages), max(peak_averages))
+    colors = plt.cm.viridis(norm(peak_averages))
+
+    # Plot peak averages
+    ax_peaks.bar(session_numbers, peak_averages, color=colors, alpha=0.7)
+
+    # Add trend line
+    if len(peak_averages) > 1:
+        z = np.polyfit(session_numbers, peak_averages, 1)
+        p = np.poly1d(z)
+        ax_peaks.plot(session_numbers, p(session_numbers), 'r--', linewidth=2,
+                      label=f'Trend: {z[0]:.4f}')
+
+        # Add correlation coefficient
+        corr, p_val = scipy.stats.pearsonr(session_numbers, peak_averages)
+        ax_peaks.text(0.05, 0.95, f'r = {corr:.3f}, p = {p_val:.3f}',
+                      transform=ax_peaks.transAxes, fontsize=10,
+                      verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    # Labels and formatting
+    ax_peaks.set_xlabel('Session Number', fontsize=12)
+    ax_peaks.set_ylabel('Peak Signal Amplitude', fontsize=12)
+    ax_peaks.set_title('Peak Signal Magnitude by Session', fontsize=14)
+    ax_peaks.set_xticks(session_numbers)
+    ax_peaks.set_xticklabels(session_numbers)  # Use session numbers
+    ax_peaks.grid(True, axis='y', alpha=0.3)
+
+    if len(peak_averages) > 1:
+        ax_peaks.legend(loc='upper left')
+
+    # Adjust layout
+    plt.tight_layout()
+
+    # Save figure
+    sort_suffix = "by_comp_conf" if comp_conf else "chronological"
+    save_figure(fig, subject_id, "all_sessions", f"average_signal_heatmap_{sort_suffix}")
+
+    plt.show()
+
+    # Return analysis results
+    return {
+        'subject_id': subject_id,
+        'session_dates': session_dates,
+        'time_axis': time_axis,
+        'session_averages': session_averages,
+        'peak_averages': peak_averages,
+        'session_confidences': session_confidences if comp_conf else None
+    }
+
+
+def add_statistical_test(subject_id, quartile_labels, all_choice_switches, quartile_trial_counts,
+                         quartile_switch_rates):
+    """
+    Add statistical analysis to the loss trials signal quartiles analysis.
+
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    quartile_labels : numpy.ndarray
+        Array containing quartile labels (0-3) for each trial
+    all_choice_switches : numpy.ndarray
+        Boolean array indicating whether a switch occurred for each trial
+    quartile_trial_counts : list
+        List of trial counts for each quartile
+    quartile_switch_rates : list
+        List of switch percentages for each quartile
+    """
+
+    print("\n=== Statistical Analysis of Switch Rates Across Quartiles ===")
+
+    contingency_table = []
+
+    for quartile in range(4):
+        quartile_mask = quartile_labels == quartile
+        trials_in_quartile = np.sum(quartile_mask)
+
+        if trials_in_quartile > 0:
+            switch_count = np.sum(all_choice_switches[quartile_mask])
+            stay_count = trials_in_quartile - switch_count
+            contingency_table.append([switch_count, stay_count])
+        else:
+            contingency_table.append([0, 0])
+
+    contingency_table = np.array(contingency_table)
+
+    # Chi-square test for independence
+    try:
+        chi2, p_chi2, dof, expected = chi2_contingency(contingency_table)
+        print(f"Chi-squared test for independence:")
+        print(f"  Chi2 = {chi2:.3f}, p = {p_chi2:.6f}, dof = {dof}")
+
+        if p_chi2 < 0.05:
+            print("  Significant difference in switch rates across quartiles (p < 0.05)")
+        else:
+            print("  No significant difference in switch rates across quartiles")
+
+        # Check if any expected frequencies are too low for reliable chi-square
+        if np.any(expected < 5):
+            print("  Warning: Some expected frequencies are < 5, chi-square may not be reliable")
+            print("  Consider using Fisher's exact test for pairwise comparisons")
+    except Exception as e:
+        print(f"  Error in chi-squared test: {e}")
+
+    # Pairwise comparisons between highest and lowest quartiles
+    try:
+        # Compare quartile 1 (lowest signal) vs quartile 4 (highest signal)
+        q1_data = contingency_table[0]
+        q4_data = contingency_table[3]
+
+        # Reshape to 2x2 for Fisher's exact test
+        fisher_table = np.array([q1_data, q4_data])
+
+        odds_ratio, p_fisher = fisher_exact(fisher_table)
+        print(f"\nFisher's exact test: Quartile 1 vs Quartile 4")
+        print(f"  Odds ratio = {odds_ratio:.3f}, p = {p_fisher:.6f}")
+
+        if p_fisher < 0.05:
+            print("  Significant difference between quartile 1 and quartile 4 (p < 0.05)")
+            # Report which quartile has higher switch rate
+            if quartile_switch_rates[0] > quartile_switch_rates[3]:
+                print(
+                    f"  Quartile 1 has a higher switch rate ({quartile_switch_rates[0]:.1f}%) than Quartile 4 ({quartile_switch_rates[3]:.1f}%)")
+            else:
+                print(
+                    f"  Quartile 4 has a higher switch rate ({quartile_switch_rates[3]:.1f}%) than Quartile 1 ({quartile_switch_rates[0]:.1f}%)")
+        else:
+            print("  No significant difference between quartile 1 and quartile 4")
+    except Exception as e:
+        print(f"  Error in Fisher's exact test: {e}")
+
+    print("\nContingency Table (Switch vs Stay for each quartile):")
+    print("             Switches  Stays   Total   Switch%")
+    for i, (switch, stay) in enumerate(contingency_table):
+        total = switch + stay
+        percent = (switch / total * 100) if total > 0 else 0
+        print(f"Quartile {i + 1}:  {switch:6d}   {stay:6d}   {total:5d}   {percent:.1f}%")
