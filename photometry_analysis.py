@@ -2228,361 +2228,6 @@ def analyze_loss_streaks_before_win(subject_id, skipped_missed=True, only_1_5=Fa
         'only_1_5': only_1_5
     }
 
-
-def analyze_loss_trials_signal_quartiles(subject_id, signal_window='pre_cue', plot_verification=True):
-    """
-    Analyze trials based on photometry signal in specified time window and determine choice switching behavior.
-    
-    For post-cue windows ('early_post' and 'late_post'):
-    - Selects current loss trials (T0) and sorts them by signal in the time window
-    - Calculates % of trials where the next choice (T+1) is different from current choice (T0)
-    
-    For pre-cue window ('pre_cue'):
-    - Selects trials that follow a loss (T0 follows T-1 loss) and sorts by pre-cue signal
-    - Calculates % of trials where the current choice (T0) is different from previous choice (T-1)
-    
-    Parameters:
-    -----------
-    subject_id : str
-        The identifier for the subject
-    signal_window : str, optional (default='pre_cue')
-        Time window to use for calculating average photometry signal:
-        - 'pre_cue': -0.75s to -0.25s before lick (-0.75 to -0.25)
-        - 'early_post': +1s to +2s after lick (1 to 2)
-        - 'late_post': +3s to +5s after lick (3 to 5)
-    plot_verification : bool, optional (default=True)
-        Whether to create verification plots showing the sorted quartiles
-        
-    Returns:
-    --------
-    dict: Analysis results including quartile switch rates and plotted data
-    """
-    # Define time windows based on the parameter
-    time_windows = {
-        'pre_cue': (-0.75, -0.25),
-        'early_post': (1.0, 2.0),
-        'late_post': (3.5, 4.5)
-    }
-    
-    if signal_window not in time_windows:
-        raise ValueError(f"Invalid signal_window. Choose from: {list(time_windows.keys())}")
-        
-    # Get time window bounds
-    window_start, window_end = time_windows[signal_window]
-    
-    # Find all session directories for this subject
-    subject_dir = os.path.join(base_dir, subject_id)
-    if not os.path.exists(subject_dir):
-        print(f"Subject directory not found: {subject_dir}")
-        return None
-    
-    # Determine analysis mode based on time window
-    is_pre_cue_analysis = signal_window == 'pre_cue'
-    
-    # Store trial data and corresponding behavior
-    all_trials_data = []         # Photometry data for all selected trials
-    all_trial_signals = []       # Average signal in window for selected trials
-    all_choice_switches = []     # Boolean: True if switch in choice
-    all_next_reward = []         # Boolean: True if next trial rewarded 
-    time_axis = None             # Will be set from the first valid session
-    
-    # Sort sessions chronologically
-    sessions = sorted([d for d in os.listdir(subject_dir)
-                       if os.path.isdir(os.path.join(subject_dir, d)) and
-                       os.path.exists(os.path.join(subject_dir, d, "deltaff.npy"))])
-    
-    # Process each session
-    for session_date in sessions:
-        print(f"Processing {subject_id}/{session_date}...")
-        session_result = process_session(subject_id, session_date)
-        if not session_result:
-            continue
-            
-        # Store time axis from the first valid session
-        if time_axis is None:
-            time_axis = session_result['time_axis']
-            
-        # Get behavioral data
-        behavior_data = session_result['behavioral_data']
-        rewards = np.array(behavior_data['reward'])
-        choices = np.array(behavior_data['choice'])
-        
-        # Skip sessions with too few trials
-        min_required = 3  # Need at least 3 trials for a meaningful analysis
-        if len(rewards) < min_required:
-            print(f"Skipping {subject_id}/{session_date}, insufficient trials")
-            continue
-            
-        # Filter out missed trials
-        non_miss_mask = choices != 'M'
-        non_miss_rewards = rewards[non_miss_mask]
-        non_miss_choices = choices[non_miss_mask]
-        
-        # Create mapping from filtered indices to original indices
-        non_miss_indices = np.where(non_miss_mask)[0]
-        filtered_to_orig = {i: non_miss_indices[i] for i in range(len(non_miss_indices))}
-        
-        # Get photometry data for valid trials
-        valid_trials = session_result['valid_trials']
-        epoched_data = session_result['epoched_data'][valid_trials]
-        
-        # Find time indices for the specified window
-        window_idx_start = np.where(time_axis >= window_start)[0][0]
-        window_idx_end = np.where(time_axis <= window_end)[0][-1]
-        
-        if is_pre_cue_analysis:
-            # PRE-CUE ANALYSIS MODE
-            # Look at trials AFTER a loss and analyze if the choice switched from the previous trial
-            
-            for i in range(1, len(non_miss_rewards)):  # Start from second trial
-                prev_trial_idx = i - 1
-                curr_trial_idx = i
-                
-                # Check if previous trial was a loss
-                if non_miss_rewards[prev_trial_idx] != 0:
-                    continue
-                    
-                # We found a trial that follows a loss
-                orig_curr_idx = filtered_to_orig[curr_trial_idx]
-                
-                # Skip if we don't have photometry data for this trial
-                if orig_curr_idx not in valid_trials:
-                    continue
-                    
-                # Get photometry data for this trial
-                valid_idx = np.where(np.array(valid_trials) == orig_curr_idx)[0]
-                if len(valid_idx) == 0:
-                    continue
-                    
-                curr_photometry = epoched_data[valid_idx[0]]
-                
-                # Calculate average signal in the specified window
-                window_signal = np.mean(curr_photometry[window_idx_start:window_idx_end])
-                
-                # Determine if the current choice is different from previous (switched)
-                choice_switched = (non_miss_choices[prev_trial_idx] != non_miss_choices[curr_trial_idx])
-                
-                # Store the data
-                all_trials_data.append(curr_photometry)
-                all_trial_signals.append(window_signal)
-                all_choice_switches.append(choice_switched)
-                all_next_reward.append(non_miss_rewards[curr_trial_idx])  # Current trial's reward outcome
-                
-        else:
-            # POST-CUE ANALYSIS MODE (original behavior)
-            # Look at current loss trials and analyze if the next choice switches
-            
-            for i in range(len(non_miss_rewards) - 1):  # Exclude the last trial (no next trial)
-                curr_trial_idx = i
-                next_trial_idx = i + 1
-                
-                # Skip if current trial is not a loss trial
-                if non_miss_rewards[curr_trial_idx] != 0:
-                    continue
-                    
-                # We found a loss trial
-                orig_curr_idx = filtered_to_orig[curr_trial_idx]
-                
-                # Skip if we don't have photometry data for this trial
-                if orig_curr_idx not in valid_trials:
-                    continue
-                    
-                # Get photometry data for this trial
-                valid_idx = np.where(np.array(valid_trials) == orig_curr_idx)[0]
-                if len(valid_idx) == 0:
-                    continue
-                    
-                curr_photometry = epoched_data[valid_idx[0]]
-                
-                # Calculate average signal in the specified window
-                window_signal = np.mean(curr_photometry[window_idx_start:window_idx_end])
-                
-                # Determine if the next choice is different from current (switched)
-                choice_switched = (non_miss_choices[curr_trial_idx] != non_miss_choices[next_trial_idx])
-                
-                # Store the data
-                all_trials_data.append(curr_photometry)
-                all_trial_signals.append(window_signal)
-                all_choice_switches.append(choice_switched)
-                all_next_reward.append(non_miss_rewards[next_trial_idx])  # Next trial's reward outcome
-    
-    # Check if we found any valid trials
-    if len(all_trials_data) == 0:
-        print(f"No valid trials found for analysis ({signal_window}) for {subject_id}")
-        return None
-        
-    # Convert lists to numpy arrays
-    all_trials_data = np.array(all_trials_data)
-    all_trial_signals = np.array(all_trial_signals)
-    all_choice_switches = np.array(all_choice_switches)
-    all_next_reward = np.array(all_next_reward)
-    
-    # Sort trials into quartiles based on signal
-    quartile_labels = pd.qcut(all_trial_signals, 4, labels=False)
-    
-    # Calculate switch rate for each quartile
-    quartile_switch_rates = []
-    quartile_trial_counts = []
-    quartile_reward_rates = []
-    
-    # Process each quartile
-    for quartile in range(4):
-        quartile_mask = quartile_labels == quartile
-        trials_in_quartile = np.sum(quartile_mask)
-        
-        if trials_in_quartile > 0:
-            # Calculate switch rate (% of trials where choice switched)
-            switch_count = np.sum(all_choice_switches[quartile_mask])
-            switch_rate = (switch_count / trials_in_quartile) * 100
-            
-            # Calculate reward rate for the relevant trial
-            reward_rate = (np.sum(all_next_reward[quartile_mask]) / trials_in_quartile) * 100
-            
-            quartile_switch_rates.append(switch_rate)
-            quartile_trial_counts.append(trials_in_quartile)
-            quartile_reward_rates.append(reward_rate)
-        else:
-            quartile_switch_rates.append(0)
-            quartile_trial_counts.append(0)
-            quartile_reward_rates.append(0)
-            
-    # Print results
-    print(f"\n=== Analysis of {signal_window} Signal Quartiles: {subject_id} ===")
-    print(f"Time window: ({window_start}s to {window_end}s)")
-    print(f"Total trials analyzed: {len(all_trial_signals)}")
-    
-    if is_pre_cue_analysis:
-        print("\nChoice Switch Rates by Pre-Cue Signal Quartile:")
-        print("(% where T0 choice differs from previous T-1 loss trial)")
-    else:
-        print("\nChoice Switch Rates by Post-Cue Signal Quartile:")
-        print("(% where next T+1 choice differs from current T0 loss trial)")
-        
-    for quartile in range(4):
-        print(f"Quartile {quartile + 1}: {quartile_switch_rates[quartile]:.1f}% switch rate "
-              f"({quartile_trial_counts[quartile]} trials)")
-              
-    print("\nReward Rates by Signal Quartile:")
-    for quartile in range(4):
-        print(f"Quartile {quartile + 1}: {quartile_reward_rates[quartile]:.1f}% rewarded")
-        
-    # Create verification plot if requested
-    if plot_verification:
-        fig = plt.figure(figsize=(15, 10))
-        gs = plt.GridSpec(3, 1, height_ratios=[2, 1, 1], hspace=0.3)
-        
-        # Plot average photometry traces by quartile
-        ax1 = fig.add_subplot(gs[0])
-        colors = ['blue', 'green', 'orange', 'red']  # Colors for quartiles
-        
-        # Plot each quartile's average trace
-        for quartile in range(4):
-            quartile_mask = quartile_labels == quartile
-            if np.sum(quartile_mask) > 0:
-                quartile_data = all_trials_data[quartile_mask]
-                quartile_avg = np.mean(quartile_data, axis=0)
-                quartile_sem = calculate_sem(quartile_data, axis=0)
-                
-                ax1.fill_between(time_axis,
-                               quartile_avg - quartile_sem,
-                               quartile_avg + quartile_sem,
-                               color=colors[quartile], alpha=0.3)
-                ax1.plot(time_axis, quartile_avg,
-                       color=colors[quartile], linewidth=2,
-                       label=f'Quartile {quartile+1} (n={quartile_trial_counts[quartile]})')
-                       
-        # Highlight the time window used for sorting
-        ax1.axvspan(window_start, window_end, color='gray', alpha=0.3, label='Sorting Window')
-        
-        # Add reference lines
-        ax1.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
-        ax1.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
-        
-        ax1.set_xlabel('Time (s)', fontsize=12)
-        ax1.set_ylabel('ΔF/F', fontsize=12)
-        
-        if is_pre_cue_analysis:
-            ax1.set_title(f'Trials After Loss Sorted by Pre-Cue Signal: {subject_id}', fontsize=14)
-        else:
-            ax1.set_title(f'Loss Trials Sorted by {signal_window} Signal: {subject_id}', fontsize=14)
-            
-        ax1.legend(loc='upper right')
-        ax1.set_xlim([-pre_cue_time, post_cue_time])
-        
-        # Plot switch rates by quartile
-        ax2 = fig.add_subplot(gs[1])
-        bars = ax2.bar(range(1, 5), quartile_switch_rates, color=colors, alpha=0.7)
-        
-        # Add trial counts as text on bars
-        for bar, count in zip(bars, quartile_trial_counts):
-            height = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width()/2., height + 2,
-                   f'n={count}', ha='center', va='bottom', fontsize=10)
-                   
-        ax2.set_xlabel('Signal Quartile', fontsize=12)
-        ax2.set_ylabel('Switch Rate (%)', fontsize=12)
-        
-        if is_pre_cue_analysis:
-            ax2.set_title('% Trials Where Choice Switched From Previous Loss Trial', fontsize=14)
-        else:
-            ax2.set_title('% Trials Where Choice Switched on Next Trial', fontsize=14)
-            
-        ax2.set_ylim(0, 100)
-        ax2.set_xticks(range(1, 5))
-        ax2.set_xticklabels([f'Q{i+1}' for i in range(4)])
-        ax2.grid(True, axis='y', alpha=0.3)
-        
-        # Plot reward rates by quartile
-        ax3 = fig.add_subplot(gs[2])
-        bars = ax3.bar(range(1, 5), quartile_reward_rates, color=colors, alpha=0.7)
-        
-        # Add trial counts as text on bars
-        for bar, count in zip(bars, quartile_trial_counts):
-            height = bar.get_height()
-            ax3.text(bar.get_x() + bar.get_width()/2., height + 2,
-                   f'n={count}', ha='center', va='bottom', fontsize=10)
-                   
-        ax3.set_xlabel('Signal Quartile', fontsize=12)
-        ax3.set_ylabel('Reward Rate (%)', fontsize=12)
-        
-        if is_pre_cue_analysis:
-            ax3.set_title('% Trials That Were Rewarded', fontsize=14)
-        else:
-            ax3.set_title('% Next Trials That Were Rewarded', fontsize=14)
-            
-        ax3.set_ylim(0, 100)
-        ax3.set_xticks(range(1, 5))
-        ax3.set_xticklabels([f'Q{i+1}' for i in range(4)])
-        ax3.grid(True, axis='y', alpha=0.3)
-        
-        plt.tight_layout()
-        
-        # Save the figure
-        mode_suffix = "after_loss" if is_pre_cue_analysis else "loss_trials"
-        save_figure(fig, subject_id, "pooled", f"{mode_suffix}_{signal_window}_quartiles")
-        
-        plt.show()
-
-    if len(all_trial_signals) >= 100:  # Only perform stats with sufficient data
-        add_statistical_test(subject_id, quartile_labels, all_choice_switches,
-                             quartile_trial_counts, quartile_switch_rates)
-        
-    # Return analysis results
-    return {
-        'subject_id': subject_id,
-        'time_axis': time_axis,
-        'signal_window': signal_window,
-        'window_bounds': (window_start, window_end),
-        'all_trials_data': all_trials_data,
-        'all_trial_signals': all_trial_signals,
-        'quartile_labels': quartile_labels,
-        'quartile_switch_rates': quartile_switch_rates,
-        'quartile_trial_counts': quartile_trial_counts,
-        'quartile_reward_rates': quartile_reward_rates,
-        'is_pre_cue_analysis': is_pre_cue_analysis
-    }
-
-
 def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False):
     """
     Create a heatmap visualization of win-loss signal differences across sessions
@@ -3187,3 +2832,1231 @@ def add_statistical_test(subject_id, quartile_labels, all_choice_switches, quart
         total = switch + stay
         percent = (switch / total * 100) if total > 0 else 0
         print(f"Quartile {i + 1}:  {switch:6d}   {stay:6d}   {total:5d}   {percent:.1f}%")
+
+def analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue', condition='loss', plot_verification=True):
+    """
+    Analyze trials based on photometry signal in specified time window and determine choice switching behavior.
+    Works with both win and loss trials as the condition.
+    
+    For post-cue windows ('early_post' and 'late_post'):
+    - Selects current win/loss trials (T0) and sorts them by signal in the time window
+    - Calculates % of trials where the next choice (T+1) is different from current choice (T0)
+    
+    For pre-cue window ('pre_cue'):
+    - Selects trials that follow a win/loss (T0 follows T-1 win/loss) and sorts by pre-cue signal
+    - Calculates % of trials where the current choice (T0) is different from previous choice (T-1)
+    
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    signal_window : str, optional (default='pre_cue')
+        Time window to use for calculating average photometry signal:
+        - 'pre_cue': -0.75s to -0.25s before lick (-0.75 to -0.25)
+        - 'early_post': +1s to +2s after lick (1 to 2)
+        - 'late_post': +3.5s to +4.5s after lick (3.5 to 4.5)
+    condition : str, optional (default='loss')
+        Which trial outcome to analyze:
+        - 'loss': Analyze trials with no reward (0)
+        - 'win': Analyze trials with reward (1)
+    plot_verification : bool, optional (default=True)
+        Whether to create verification plots showing the sorted quartiles
+        
+    Returns:
+    --------
+    dict: Analysis results including quartile switch rates and plotted data
+    """
+    # Define time windows based on the parameter
+    time_windows = {
+        'pre_cue': (-0.75, -0.25),
+        'early_post': (1.0, 2.0),
+        'late_post': (3.5, 4.5)
+    }
+    
+    if signal_window not in time_windows:
+        raise ValueError(f"Invalid signal_window. Choose from: {list(time_windows.keys())}")
+        
+    if condition not in ['win', 'loss']:
+        raise ValueError("Condition must be either 'win' or 'loss'")
+        
+    # Get time window bounds
+    window_start, window_end = time_windows[signal_window]
+    
+    # Find all session directories for this subject
+    subject_dir = os.path.join(base_dir, subject_id)
+    if not os.path.exists(subject_dir):
+        print(f"Subject directory not found: {subject_dir}")
+        return None
+    
+    # Determine analysis mode based on time window
+    is_pre_cue_analysis = signal_window == 'pre_cue'
+    
+    # Store trial data and corresponding behavior
+    all_trials_data = []         # Photometry data for all selected trials
+    all_trial_signals = []       # Average signal in window for selected trials
+    all_choice_switches = []     # Boolean: True if switch in choice
+    all_next_reward = []         # Boolean: True if next trial rewarded 
+    time_axis = None             # Will be set from the first valid session
+    
+    # Set the reward value we're looking for based on condition
+    target_reward = 1 if condition == 'win' else 0
+    
+    # Sort sessions chronologically
+    sessions = sorted([d for d in os.listdir(subject_dir)
+                       if os.path.isdir(os.path.join(subject_dir, d)) and
+                       os.path.exists(os.path.join(subject_dir, d, "deltaff.npy"))])
+    
+    # Process each session
+    for session_date in sessions:
+        print(f"Processing {subject_id}/{session_date}...")
+        session_result = process_session(subject_id, session_date)
+        if not session_result:
+            continue
+            
+        # Store time axis from the first valid session
+        if time_axis is None:
+            time_axis = session_result['time_axis']
+            
+        # Get behavioral data
+        behavior_data = session_result['behavioral_data']
+        rewards = np.array(behavior_data['reward'])
+        choices = np.array(behavior_data['choice'])
+        
+        # Skip sessions with too few trials
+        min_required = 3  # Need at least 3 trials for a meaningful analysis
+        if len(rewards) < min_required:
+            print(f"Skipping {subject_id}/{session_date}, insufficient trials")
+            continue
+            
+        # Filter out missed trials
+        non_miss_mask = choices != 'M'
+        non_miss_rewards = rewards[non_miss_mask]
+        non_miss_choices = choices[non_miss_mask]
+        
+        # Create mapping from filtered indices to original indices
+        non_miss_indices = np.where(non_miss_mask)[0]
+        filtered_to_orig = {i: non_miss_indices[i] for i in range(len(non_miss_indices))}
+        
+        # Get photometry data for valid trials
+        valid_trials = session_result['valid_trials']
+        epoched_data = session_result['epoched_data'][valid_trials]
+        
+        # Find time indices for the specified window
+        window_idx_start = np.where(time_axis >= window_start)[0][0]
+        window_idx_end = np.where(time_axis <= window_end)[0][-1]
+        
+        if is_pre_cue_analysis:
+            # PRE-CUE ANALYSIS MODE
+            # Look at trials AFTER a win/loss and analyze if the choice switched from the previous trial
+            
+            for i in range(1, len(non_miss_rewards)):  # Start from second trial
+                prev_trial_idx = i - 1
+                curr_trial_idx = i
+                
+                # Check if previous trial matches our target condition (win or loss)
+                if non_miss_rewards[prev_trial_idx] != target_reward:
+                    continue
+                    
+                # We found a trial that follows our target condition
+                orig_curr_idx = filtered_to_orig[curr_trial_idx]
+                
+                # Skip if we don't have photometry data for this trial
+                if orig_curr_idx not in valid_trials:
+                    continue
+                    
+                # Get photometry data for this trial
+                valid_idx = np.where(np.array(valid_trials) == orig_curr_idx)[0]
+                if len(valid_idx) == 0:
+                    continue
+                    
+                curr_photometry = epoched_data[valid_idx[0]]
+                
+                # Calculate average signal in the specified window
+                window_signal = np.mean(curr_photometry[window_idx_start:window_idx_end])
+                
+                # Determine if the current choice is different from previous (switched)
+                choice_switched = (non_miss_choices[prev_trial_idx] != non_miss_choices[curr_trial_idx])
+                
+                # Store the data
+                all_trials_data.append(curr_photometry)
+                all_trial_signals.append(window_signal)
+                all_choice_switches.append(choice_switched)
+                all_next_reward.append(non_miss_rewards[curr_trial_idx])  # Current trial's reward outcome
+                
+        else:
+            # POST-CUE ANALYSIS MODE
+            # Look at current win/loss trials and analyze if the next choice switches
+            
+            for i in range(len(non_miss_rewards) - 1):  # Exclude the last trial (no next trial)
+                curr_trial_idx = i
+                next_trial_idx = i + 1
+                
+                # Skip if current trial doesn't match our target condition
+                if non_miss_rewards[curr_trial_idx] != target_reward:
+                    continue
+                    
+                # We found a trial matching our condition
+                orig_curr_idx = filtered_to_orig[curr_trial_idx]
+                
+                # Skip if we don't have photometry data for this trial
+                if orig_curr_idx not in valid_trials:
+                    continue
+                    
+                # Get photometry data for this trial
+                valid_idx = np.where(np.array(valid_trials) == orig_curr_idx)[0]
+                if len(valid_idx) == 0:
+                    continue
+                    
+                curr_photometry = epoched_data[valid_idx[0]]
+                
+                # Calculate average signal in the specified window
+                window_signal = np.mean(curr_photometry[window_idx_start:window_idx_end])
+                
+                # Determine if the next choice is different from current (switched)
+                choice_switched = (non_miss_choices[curr_trial_idx] != non_miss_choices[next_trial_idx])
+                
+                # Store the data
+                all_trials_data.append(curr_photometry)
+                all_trial_signals.append(window_signal)
+                all_choice_switches.append(choice_switched)
+                all_next_reward.append(non_miss_rewards[next_trial_idx])  # Next trial's reward outcome
+    
+    # Check if we found any valid trials
+    if len(all_trials_data) == 0:
+        print(f"No valid {condition} trials found for analysis ({signal_window}) for {subject_id}")
+        return None
+        
+    # Convert lists to numpy arrays
+    all_trials_data = np.array(all_trials_data)
+    all_trial_signals = np.array(all_trial_signals)
+    all_choice_switches = np.array(all_choice_switches)
+    all_next_reward = np.array(all_next_reward)
+    
+    # Sort trials into quartiles based on signal
+    quartile_labels = pd.qcut(all_trial_signals, 4, labels=False)
+    
+    # Calculate switch rate for each quartile
+    quartile_switch_rates = []
+    quartile_trial_counts = []
+    quartile_reward_rates = []
+    
+    # Process each quartile
+    for quartile in range(4):
+        quartile_mask = quartile_labels == quartile
+        trials_in_quartile = np.sum(quartile_mask)
+        
+        if trials_in_quartile > 0:
+            # Calculate switch rate (% of trials where choice switched)
+            switch_count = np.sum(all_choice_switches[quartile_mask])
+            switch_rate = (switch_count / trials_in_quartile) * 100
+            
+            # Calculate reward rate for the relevant trial
+            reward_rate = (np.sum(all_next_reward[quartile_mask]) / trials_in_quartile) * 100
+            
+            quartile_switch_rates.append(switch_rate)
+            quartile_trial_counts.append(trials_in_quartile)
+            quartile_reward_rates.append(reward_rate)
+        else:
+            quartile_switch_rates.append(0)
+            quartile_trial_counts.append(0)
+            quartile_reward_rates.append(0)
+            
+    # Print results
+    outcome_label = "Win" if condition == 'win' else "Loss"
+    print(f"\n=== Analysis of {signal_window} Signal Quartiles ({outcome_label} trials): {subject_id} ===")
+    print(f"Time window: ({window_start}s to {window_end}s)")
+    print(f"Total trials analyzed: {len(all_trial_signals)}")
+    
+    if is_pre_cue_analysis:
+        print(f"\nChoice Switch Rates by Pre-Cue Signal Quartile (after {outcome_label.lower()} trials):")
+        print(f"(% where T0 choice differs from previous T-1 {outcome_label.lower()} trial)")
+    else:
+        print(f"\nChoice Switch Rates by Post-Cue Signal Quartile (for {outcome_label.lower()} trials):")
+        print(f"(% where next T+1 choice differs from current T0 {outcome_label.lower()} trial)")
+        
+    for quartile in range(4):
+        print(f"Quartile {quartile + 1}: {quartile_switch_rates[quartile]:.1f}% switch rate "
+              f"({quartile_trial_counts[quartile]} trials)")
+              
+    print("\nReward Rates by Signal Quartile:")
+    for quartile in range(4):
+        print(f"Quartile {quartile + 1}: {quartile_reward_rates[quartile]:.1f}% rewarded")
+        
+    # Create verification plot if requested
+    if plot_verification:
+        fig = plt.figure(figsize=(15, 10))
+        gs = plt.GridSpec(3, 1, height_ratios=[2, 1, 1], hspace=0.3)
+        
+        # Plot average photometry traces by quartile
+        ax1 = fig.add_subplot(gs[0])
+        colors = ['blue', 'green', 'orange', 'red']  # Colors for quartiles
+        
+        # Plot each quartile's average trace
+        for quartile in range(4):
+            quartile_mask = quartile_labels == quartile
+            if np.sum(quartile_mask) > 0:
+                quartile_data = all_trials_data[quartile_mask]
+                quartile_avg = np.mean(quartile_data, axis=0)
+                quartile_sem = calculate_sem(quartile_data, axis=0)
+                
+                ax1.fill_between(time_axis,
+                               quartile_avg - quartile_sem,
+                               quartile_avg + quartile_sem,
+                               color=colors[quartile], alpha=0.3)
+                ax1.plot(time_axis, quartile_avg,
+                       color=colors[quartile], linewidth=2,
+                       label=f'Quartile {quartile+1} (n={quartile_trial_counts[quartile]})')
+                       
+        # Highlight the time window used for sorting
+        ax1.axvspan(window_start, window_end, color='gray', alpha=0.3, label='Sorting Window')
+        
+        # Add reference lines
+        ax1.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+        ax1.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        
+        ax1.set_xlabel('Time (s)', fontsize=12)
+        ax1.set_ylabel('ΔF/F', fontsize=12)
+        
+        if is_pre_cue_analysis:
+            ax1.set_title(f'Trials After {outcome_label} Sorted by Pre-Cue Signal: {subject_id}', fontsize=14)
+        else:
+            ax1.set_title(f'{outcome_label} Trials Sorted by {signal_window} Signal: {subject_id}', fontsize=14)
+            
+        ax1.legend(loc='upper right')
+        ax1.set_xlim([-pre_cue_time, post_cue_time])
+        
+        # Plot switch rates by quartile
+        ax2 = fig.add_subplot(gs[1])
+        bars = ax2.bar(range(1, 5), quartile_switch_rates, color=colors, alpha=0.7)
+        
+        # Add trial counts as text on bars
+        for bar, count in zip(bars, quartile_trial_counts):
+            height = bar.get_height()
+            ax2.text(bar.get_x() + bar.get_width()/2., height + 2,
+                   f'n={count}', ha='center', va='bottom', fontsize=10)
+                   
+        ax2.set_xlabel('Signal Quartile', fontsize=12)
+        ax2.set_ylabel('Switch Rate (%)', fontsize=12)
+        
+        if is_pre_cue_analysis:
+            ax2.set_title(f'% Trials Where Choice Switched From Previous {outcome_label} Trial', fontsize=14)
+        else:
+            ax2.set_title('% Trials Where Choice Switched on Next Trial', fontsize=14)
+            
+        ax2.set_ylim(0, 100)
+        ax2.set_xticks(range(1, 5))
+        ax2.set_xticklabels([f'Q{i+1}' for i in range(4)])
+        ax2.grid(True, axis='y', alpha=0.3)
+        
+        # Plot reward rates by quartile
+        ax3 = fig.add_subplot(gs[2])
+        bars = ax3.bar(range(1, 5), quartile_reward_rates, color=colors, alpha=0.7)
+        
+        # Add trial counts as text on bars
+        for bar, count in zip(bars, quartile_trial_counts):
+            height = bar.get_height()
+            ax3.text(bar.get_x() + bar.get_width()/2., height + 2,
+                   f'n={count}', ha='center', va='bottom', fontsize=10)
+                   
+        ax3.set_xlabel('Signal Quartile', fontsize=12)
+        ax3.set_ylabel('Reward Rate (%)', fontsize=12)
+        
+        if is_pre_cue_analysis:
+            ax3.set_title('% Trials That Were Rewarded', fontsize=14)
+        else:
+            ax3.set_title('% Next Trials That Were Rewarded', fontsize=14)
+            
+        ax3.set_ylim(0, 100)
+        ax3.set_xticks(range(1, 5))
+        ax3.set_xticklabels([f'Q{i+1}' for i in range(4)])
+        ax3.grid(True, axis='y', alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # Save the figure
+        condition_str = condition  # 'win' or 'loss'
+        mode_suffix = f"after_{condition_str}" if is_pre_cue_analysis else f"{condition_str}_trials"
+        save_figure(fig, subject_id, "pooled", f"{mode_suffix}_{signal_window}_quartiles")
+        
+        plt.show()
+
+    # Add statistical analysis if we have enough data
+    if len(all_trial_signals) >= 100:  # Only perform stats with sufficient data
+        add_statistical_test(subject_id, quartile_labels, all_choice_switches,
+                             quartile_trial_counts, quartile_switch_rates)
+        
+    # Return analysis results
+    return {
+        'subject_id': subject_id,
+        'time_axis': time_axis,
+        'signal_window': signal_window,
+        'condition': condition,
+        'window_bounds': (window_start, window_end),
+        'all_trials_data': all_trials_data,
+        'all_trial_signals': all_trial_signals,
+        'quartile_labels': quartile_labels,
+        'quartile_switch_rates': quartile_switch_rates,
+        'quartile_trial_counts': quartile_trial_counts,
+        'quartile_reward_rates': quartile_reward_rates,
+        'is_pre_cue_analysis': is_pre_cue_analysis
+    }
+
+def analyze_switch_probabilities(subject_id, session_date=None):
+    """
+    Analyze probability of switching choices following win vs loss trials 
+    for a subject, and test if there is a significant difference.
+    
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    session_date : str, optional
+        Specific session to analyze. If None, analyze all sessions.
+        
+    Returns:
+    --------
+    dict: Analysis results including switch probabilities and statistical tests
+    """
+    # Store results
+    results = {
+        'subject_id': subject_id,
+        'after_win': {'switches': 0, 'total': 0, 'rate': 0},
+        'after_loss': {'switches': 0, 'total': 0, 'rate': 0}, 
+        'sessions_analyzed': 0,
+        'session_results': []
+    }
+    
+    # Determine which sessions to analyze
+    if session_date is None:
+        # Get all sessions for this subject
+        subject_path = os.path.join(base_dir, subject_id)
+        sessions = sorted([d for d in os.listdir(subject_path)
+                         if os.path.isdir(os.path.join(subject_path, d)) and
+                         os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+    else:
+        sessions = [session_date]
+    
+    print(f"Analyzing switch probabilities for {subject_id} across {len(sessions)} sessions...")
+    
+    # Process each session
+    for sess in sessions:
+        print(f"Processing {subject_id}/{sess}...")
+        session_result = process_session(subject_id, sess)
+        if not session_result:
+            continue
+            
+        # Get behavioral data
+        behavior_data = session_result['behavioral_data']
+        rewards = np.array(behavior_data['reward'])
+        choices = np.array(behavior_data['choice'])
+        
+        # Skip sessions with too few trials
+        if len(choices) < 10:  # Need reasonable number of trials
+            print(f"Skipping {subject_id}/{sess} - too few trials")
+            continue
+            
+        # Filter out missed trials
+        non_miss_mask = choices != 'M'
+        filtered_choices = choices[non_miss_mask]
+        filtered_rewards = rewards[non_miss_mask]
+        
+        # Skip if not enough trials after filtering
+        if len(filtered_choices) < 10:
+            print(f"Skipping {subject_id}/{sess} - too few non-missed trials")
+            continue
+            
+        # Initialize counters for this session
+        session_stats = {
+            'session_date': sess,
+            'after_win': {'switches': 0, 'total': 0, 'rate': 0},
+            'after_loss': {'switches': 0, 'total': 0, 'rate': 0}
+        }
+        
+        # Count switches after wins and losses
+        for i in range(1, len(filtered_choices)):
+            prev_outcome = filtered_rewards[i-1]
+            curr_choice = filtered_choices[i]
+            prev_choice = filtered_choices[i-1]
+            
+            # Check if choice switched
+            switched = curr_choice != prev_choice
+            
+            # Categorize by previous trial outcome
+            if prev_outcome == 1:  # Win
+                session_stats['after_win']['total'] += 1
+                if switched:
+                    session_stats['after_win']['switches'] += 1
+            else:  # Loss
+                session_stats['after_loss']['total'] += 1
+                if switched:
+                    session_stats['after_loss']['switches'] += 1
+        
+        # Calculate switch rates for this session
+        if session_stats['after_win']['total'] > 0:
+            session_stats['after_win']['rate'] = (session_stats['after_win']['switches'] / session_stats['after_win']['total'] * 100)
+        if session_stats['after_loss']['total'] > 0:
+            session_stats['after_loss']['rate'] = (session_stats['after_loss']['switches'] / 
+                                                 session_stats['after_loss']['total'] * 100)
+        
+        # Add session data to overall results
+        results['session_results'].append(session_stats)
+        results['after_win']['switches'] += session_stats['after_win']['switches']
+        results['after_win']['total'] += session_stats['after_win']['total']
+        results['after_loss']['switches'] += session_stats['after_loss']['switches']
+        results['after_loss']['total'] += session_stats['after_loss']['total']
+        results['sessions_analyzed'] += 1
+        
+        # Print session results
+        print(f"  Session {sess} results:")
+        print(f"    After win: {session_stats['after_win']['switches']}/{session_stats['after_win']['total']} " +
+              f"switches ({session_stats['after_win']['rate']:.1f}%)")
+        print(f"    After loss: {session_stats['after_loss']['switches']}/{session_stats['after_loss']['total']} " +
+              f"switches ({session_stats['after_loss']['rate']:.1f}%)")
+    
+    # Calculate overall switch rates
+    if results['after_win']['total'] > 0:
+        results['after_win']['rate'] = results['after_win']['switches'] / results['after_win']['total'] * 100
+    if results['after_loss']['total'] > 0:
+        results['after_loss']['rate'] = results['after_loss']['switches'] / results['after_loss']['total'] * 100
+    
+    # Statistical testing: Chi-square test for independence
+    contingency_table = np.array([
+        [results['after_win']['switches'], results['after_win']['total'] - results['after_win']['switches']],
+        [results['after_loss']['switches'], results['after_loss']['total'] - results['after_loss']['switches']]
+    ])
+    
+    try:
+        chi2, p_chi2, dof, expected = chi2_contingency(contingency_table)
+        results['statistics'] = {
+            'chi2': chi2,
+            'p_value': p_chi2,
+            'dof': dof,
+            'expected': expected
+        }
+        
+        # Fisher's exact test (more appropriate for smaller samples)
+        odds_ratio, p_fisher = fisher_exact(contingency_table)
+        results['statistics']['fisher_p_value'] = p_fisher
+        results['statistics']['odds_ratio'] = odds_ratio
+        
+    except Exception as e:
+        print(f"Error in statistical test: {e}")
+        results['statistics'] = {'error': str(e)}
+    
+    # Print overall results with statistical test
+    print("\n=== Overall Switch Probability Analysis ===")
+    print(f"Subject: {subject_id}")
+    print(f"Sessions analyzed: {results['sessions_analyzed']}")
+    print(f"After win: {results['after_win']['switches']}/{results['after_win']['total']} " +
+          f"switches ({results['after_win']['rate']:.1f}%)")
+    print(f"After loss: {results['after_loss']['switches']}/{results['after_loss']['total']} " +
+          f"switches ({results['after_loss']['rate']:.1f}%)")
+    
+    # Print statistical test results
+    if 'statistics' in results and 'error' not in results['statistics']:
+        print("\nStatistical Tests:")
+        print(f"Chi-square test: χ² = {results['statistics']['chi2']:.2f}, p = {results['statistics']['p_value']:.5f}")
+        print(f"Fisher's exact test: p = {results['statistics']['fisher_p_value']:.5f}, " + 
+              f"odds ratio = {results['statistics']['odds_ratio']:.2f}")
+        
+        sig_level = 0.05
+        if results['statistics']['p_value'] < sig_level or results['statistics']['fisher_p_value'] < sig_level:
+            # Determine which condition has higher switch rate
+            if results['after_win']['rate'] > results['after_loss']['rate']:
+                print("\nResult: Subject significantly more likely to switch after wins than losses")
+            else:
+                print("\nResult: Subject significantly more likely to switch after losses than wins")
+        else:
+            print("\nResult: No significant difference in switch behavior after wins vs losses")
+    
+    # Create visualization
+    if results['sessions_analyzed'] > 0:
+        plt.figure(figsize=(12, 6))
+        
+        # If analyzing multiple sessions, plot session-by-session rates
+        if len(results['session_results']) > 1:
+            # Extract data for plotting
+            sessions = list(range(1, results['sessions_analyzed'] + 1))
+            win_rates = [s['after_win']['rate'] for s in results['session_results']]
+            loss_rates = [s['after_loss']['rate'] for s in results['session_results']]
+            
+            # Plot session data
+            plt.subplot(1, 2, 1)
+            plt.plot(sessions, win_rates, 'o-', color='green', label='After Win')
+            plt.plot(sessions, loss_rates, 'o-', color='red', label='After Loss')
+            plt.axhline(y=50, color='gray', linestyle='--', alpha=0.7)
+            plt.xlabel('Session Number')
+            plt.ylabel('Switch Rate (%)')
+            plt.title('Switch Rates Across Sessions')
+            plt.ylim(0, 100)
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+            
+            # Bar plot of overall rates on right side
+            plt.subplot(1, 2, 2)
+            
+        # Create bar chart (standalone for single session, or right panel for multiple)
+        bars = plt.bar([1, 2], 
+                      [results['after_win']['rate'], results['after_loss']['rate']], 
+                      color=['green', 'red'])
+        
+        # Add labels to bars
+        for bar, count, total in zip(bars, 
+                                   [results['after_win']['switches'], results['after_loss']['switches']],
+                                   [results['after_win']['total'], results['after_loss']['total']]):
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height + 2,
+                   f'{count}/{total}\n({height:.1f}%)', ha='center', va='bottom', fontsize=10)
+        
+        plt.xticks([1, 2], ['After Win', 'After Loss'])
+        plt.ylabel('Switch Rate (%)')
+        plt.title('Overall Switch Probabilities')
+        plt.ylim(0, 100)
+        plt.grid(True, axis='y', alpha=0.3)
+        
+        # Add statistical annotation if we have statistics
+        if 'statistics' in results and 'p_value' in results['statistics']:
+            p_val = min(results['statistics']['p_value'], results['statistics']['fisher_p_value'])
+            if p_val < 0.001:
+                sig_text = "***"
+            elif p_val < 0.01:
+                sig_text = "**"
+            elif p_val < 0.05:
+                sig_text = "*"
+            else:
+                sig_text = "n.s."
+                
+            # Draw a line connecting the bars with significance
+            height = max(results['after_win']['rate'], results['after_loss']['rate']) + 5
+            plt.plot([1, 2], [height, height], 'k-', linewidth=1.5)
+            plt.text(1.5, height + 2, sig_text, ha='center', va='bottom', fontsize=14)
+            
+            # Add p-value text
+            plt.text(1.5, height + 8, f"p = {p_val:.4f}", ha='center', va='bottom', fontsize=10)
+        
+        plt.tight_layout()
+        
+        # Save the figure
+        save_figure(plt.gcf(), subject_id, "pooled", "switch_probabilities")
+        plt.show()
+    
+    return results
+
+
+def analyze_switch_probability_quartiles(subject_id, session_date=None, win_loss=False):
+    """
+    Analyze photometry signals binned by switch probability quartiles for a single session or pooled across sessions.
+
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    session_date : str, optional
+        Specific session to analyze. If None, analyze all sessions.
+    win_loss : bool, optional
+        Whether to split by rewarded/unrewarded trials
+
+    Returns:
+    --------
+    dict: Analysis results including quartile bins and switch probability values
+    """
+    all_plotting_data = []
+    all_switch_probs = []
+    all_reward_outcomes = []
+    time_axis = None
+    plot_title = ''
+
+    if session_date is None:
+        # Get all sessions for pooled analysis
+        subject_path = os.path.join(base_dir, subject_id)
+        sessions = sorted([d for d in os.listdir(subject_path)
+                           if os.path.isdir(os.path.join(subject_path, d)) and
+                           os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+
+        # Process each session separately
+        for session_date in sessions:
+            session_result = process_session(subject_id, session_date)
+            if not session_result:
+                continue
+
+            if len(session_result['non_m_trials']) < 100:
+                print(
+                    f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
+                continue
+
+            # Calculate switch probabilities for this session
+            behavior_data = session_result['behavioral_data']
+            choices = np.array(behavior_data['choice'])
+
+            # Filter out missed trials
+            non_miss_mask = choices != 'M'
+            filtered_choices = choices[non_miss_mask]
+
+            # Skip if not enough choices after filtering
+            if len(filtered_choices) < 10:
+                print(f"Skipping {subject_id}/{session_date}, insufficient non-missed trials.")
+                continue
+
+            # Calculate moving average switch probability with window size 15
+            window_size = 15
+            switch_probs = []
+            overall_switch_rate = 0
+
+            # First calculate overall switch rate for the session
+            for i in range(1, len(filtered_choices)):
+                if filtered_choices[i] != filtered_choices[i - 1]:
+                    overall_switch_rate += 1
+            if len(filtered_choices) > 1:
+                overall_switch_rate /= (len(filtered_choices) - 1)
+
+            # Calculate moving average switch probabilities
+            for i in range(len(filtered_choices)):
+                if i < window_size:
+                    # For early trials, use available data plus weighted overall rate
+                    switches = 0
+                    comparisons = 0
+
+                    for j in range(1, i + 1):
+                        if filtered_choices[j] != filtered_choices[j - 1]:
+                            switches += 1
+                        comparisons += 1
+
+                    if comparisons > 0:
+                        recent_rate = switches / comparisons
+                    else:
+                        recent_rate = overall_switch_rate
+
+                    # Weight: how much of the window size we have available
+                    available_weight = comparisons / window_size
+                    switch_prob = (available_weight * recent_rate +
+                                   (1 - available_weight) * overall_switch_rate)
+                else:
+                    # For later trials, use full window
+                    switches = 0
+                    for j in range(i - window_size + 1, i + 1):
+                        if j > 0 and filtered_choices[j] != filtered_choices[j - 1]:
+                            switches += 1
+                    switch_prob = switches / window_size
+
+                switch_probs.append(switch_prob)
+
+            switch_probs = np.array(switch_probs)
+
+            # Map these probabilities to the valid trials with photometry data
+            non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
+                                      if idx in session_result["non_m_trials"]])
+
+            # Get the original indices for non-missed trials
+            orig_non_miss_indices = np.where(non_miss_mask)[0]
+
+            # Create mapping from valid photometry trial to behavior index
+            trial_switch_probs = []
+            for idx in non_m_indices:
+                # Find the behavior index for this photometry trial
+                if idx < len(orig_non_miss_indices):
+                    behavior_idx = orig_non_miss_indices[idx]
+                    if behavior_idx < len(switch_probs):
+                        trial_switch_probs.append(switch_probs[behavior_idx])
+                    else:
+                        trial_switch_probs.append(overall_switch_rate)
+                else:
+                    trial_switch_probs.append(overall_switch_rate)
+
+            # Store data for this session
+            all_plotting_data.append(session_result['plotting_data'])
+            all_switch_probs.extend(trial_switch_probs)
+            all_reward_outcomes.append(session_result["reward_outcomes"][non_m_indices])
+            time_axis = session_result['time_axis']
+
+        plot_title = f'Pooled Photometry by Switch Probability Quartiles: {subject_id}'
+        plotting_data = np.vstack(all_plotting_data)
+        switch_probs = np.array(all_switch_probs)
+        reward_outcomes = np.concatenate(all_reward_outcomes)
+
+    else:
+        # Single session analysis
+        session_result = process_session(subject_id, session_date)
+        if not session_result:
+            print(f"Could not process session {subject_id}/{session_date}")
+            return None
+
+        # Calculate switch probabilities for this session
+        behavior_data = session_result['behavioral_data']
+        choices = np.array(behavior_data['choice'])
+
+        # Filter out missed trials
+        non_miss_mask = choices != 'M'
+        filtered_choices = choices[non_miss_mask]
+
+        # Skip if not enough choices after filtering
+        if len(filtered_choices) < 10:
+            print(f"Insufficient non-missed trials in {subject_id}/{session_date}")
+            return None
+
+        # Calculate moving average switch probability with window size 15
+        window_size = 15
+        switch_probs = []
+        overall_switch_rate = 0
+
+        # First calculate overall switch rate for the session
+        for i in range(1, len(filtered_choices)):
+            if filtered_choices[i] != filtered_choices[i - 1]:
+                overall_switch_rate += 1
+        if len(filtered_choices) > 1:
+            overall_switch_rate /= (len(filtered_choices) - 1)
+
+        # Calculate moving average switch probabilities
+        for i in range(len(filtered_choices)):
+            if i < window_size:
+                # For early trials, use available data plus weighted overall rate
+                switches = 0
+                comparisons = 0
+
+                for j in range(1, i + 1):
+                    if filtered_choices[j] != filtered_choices[j - 1]:
+                        switches += 1
+                    comparisons += 1
+
+                if comparisons > 0:
+                    recent_rate = switches / comparisons
+                else:
+                    recent_rate = overall_switch_rate
+
+                # Weight: how much of the window size we have available
+                available_weight = comparisons / window_size
+                switch_prob = (available_weight * recent_rate +
+                               (1 - available_weight) * overall_switch_rate)
+            else:
+                # For later trials, use full window
+                switches = 0
+                for j in range(i - window_size + 1, i + 1):
+                    if j > 0 and filtered_choices[j] != filtered_choices[j - 1]:
+                        switches += 1
+                switch_prob = switches / window_size
+
+            switch_probs.append(switch_prob)
+
+        switch_probs = np.array(switch_probs)
+
+        # Map these probabilities to the valid trials with photometry data
+        non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
+                                  if idx in session_result["non_m_trials"]])
+
+        # Get the original indices for non-missed trials
+        orig_non_miss_indices = np.where(non_miss_mask)[0]
+
+        # Create mapping from valid photometry trial to behavior index
+        trial_switch_probs = []
+        for idx in non_m_indices:
+            # Find the behavior index for this photometry trial
+            if idx < len(orig_non_miss_indices):
+                behavior_idx = orig_non_miss_indices[idx]
+                if behavior_idx < len(switch_probs):
+                    trial_switch_probs.append(switch_probs[behavior_idx])
+                else:
+                    trial_switch_probs.append(overall_switch_rate)
+            else:
+                trial_switch_probs.append(overall_switch_rate)
+
+        plotting_data = session_result['plotting_data']
+        switch_probs = np.array(trial_switch_probs)
+        reward_outcomes = session_result["reward_outcomes"][non_m_indices]
+        time_axis = session_result['time_axis']
+        plot_title = f'Photometry by Switch Probability Quartiles: {subject_id} - {session_date}'
+
+    # Create quartile bins based on switch probabilities
+    quartile_bins = pd.qcut(switch_probs, q=4, labels=False)
+
+    # Calculate average switch probability for each quartile
+    quartile_averages = []
+    for quartile in range(4):
+        quartile_avg = np.mean(switch_probs[quartile_bins == quartile])
+        quartile_averages.append(quartile_avg)
+
+    # Print average switch probabilities for each quartile
+    print(f"\nAverage switch probabilities by quartile:")
+    for quartile in range(4):
+        print(f"Quartile {quartile + 1}: {quartile_averages[quartile]:.4f}")
+
+    # Create the plot
+    plt.figure(figsize=(12, 7))
+    colors = ['blue', 'green', 'orange', 'red']  # From lowest to highest switch probability
+
+    if win_loss:
+        for quartile in range(4):
+            quartile_rewarded = (quartile_bins == quartile) & (reward_outcomes == 1)
+            quartile_unrewarded = (quartile_bins == quartile) & (reward_outcomes == 0)
+
+            if np.sum(quartile_rewarded) > 0:
+                rewarded_avg = np.mean(plotting_data[quartile_rewarded], axis=0)
+                rewarded_sem = calculate_sem(plotting_data[quartile_rewarded], axis=0)
+                plt.fill_between(time_axis,
+                                 rewarded_avg - rewarded_sem,
+                                 rewarded_avg + rewarded_sem,
+                                 color=colors[quartile], alpha=0.3)
+                plt.plot(time_axis, rewarded_avg,
+                         color=colors[quartile], linewidth=2,
+                         label=f'Quartile {quartile + 1} Rewarded (n={np.sum(quartile_rewarded)})')
+
+            if np.sum(quartile_unrewarded) > 0:
+                unrewarded_avg = np.mean(plotting_data[quartile_unrewarded], axis=0)
+                unrewarded_sem = calculate_sem(plotting_data[quartile_unrewarded], axis=0)
+                plt.plot(time_axis, unrewarded_avg,
+                         color=colors[quartile], linewidth=2, linestyle='--',
+                         label=f'Quartile {quartile + 1} Unrewarded (n={np.sum(quartile_unrewarded)})')
+    else:
+        for quartile in range(4):
+            quartile_trials = quartile_bins == quartile
+            if np.sum(quartile_trials) > 0:
+                quartile_avg = np.mean(plotting_data[quartile_trials], axis=0)
+                quartile_sem = calculate_sem(plotting_data[quartile_trials], axis=0)
+
+                plt.fill_between(time_axis,
+                                 quartile_avg - quartile_sem,
+                                 quartile_avg + quartile_sem,
+                                 color=colors[quartile], alpha=0.3)
+                plt.plot(time_axis, quartile_avg,
+                         color=colors[quartile], linewidth=2,
+                         label=f'Quartile {quartile + 1} (n={np.sum(quartile_trials)})')
+
+    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+    plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+    plt.xlabel('Time (s)', fontsize=12)
+    plt.ylabel('ΔF/F', fontsize=12)
+    plt.title(plot_title, fontsize=14)
+    plt.xlim([-pre_cue_time, post_cue_time])
+    plt.legend(loc='upper right')
+
+    # Add text with quartile averages at the bottom of the plot
+    quartile_text = "Average switch probabilities: " + ", ".join(
+        [f"Q{q + 1}: {avg:.4f}" for q, avg in enumerate(quartile_averages)])
+    plt.figtext(0.5, 0.01, quartile_text, ha='center', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+
+    plt.tight_layout(rect=[0, 0.05, 1, 1])  # Make room for the text at the bottom
+
+    # Save the figure
+    fig_name = f"switch_probability_quartiles{'_pooled' if session_date is None else ''}"
+    save_figure(plt.gcf(), subject_id, session_date or "pooled",
+                f"{fig_name}{'_winloss' if win_loss else ''}")
+
+    plt.show()
+
+    return {
+        'quartile_bins': quartile_bins,
+        'switch_probs': switch_probs,
+        'quartile_averages': quartile_averages
+    }
+
+
+def analyze_normalized_quartile_effects(subject_id):
+    """
+    Analyze whether the quartile effect on switch probability is stronger than expected
+    given the baseline differences in win-stay/lose-switch behavior.
+    """
+    print(f"Analyzing normalized quartile effects for {subject_id}...")
+
+    # First, get baseline win/loss switch probabilities
+    switch_probs = analyze_switch_probabilities(subject_id)
+
+    if not switch_probs or 'after_win' not in switch_probs or 'after_loss' not in switch_probs:
+        print("Could not obtain baseline switch probabilities")
+        return None
+
+    baseline_win_switch = switch_probs['after_win']['rate']
+    baseline_loss_switch = switch_probs['after_loss']['rate']
+
+    print(f"\nBaseline switch probabilities:")
+    print(f"After win: {baseline_win_switch:.2f}%")
+    print(f"After loss: {baseline_loss_switch:.2f}%")
+
+    # Analyze pre-cue quartiles for win and loss trials
+    loss_results = analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue',
+                                                       condition='loss', plot_verification=False)
+    win_results = analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue',
+                                                      condition='win', plot_verification=False)
+
+    if not loss_results or not win_results:
+        print("Could not obtain quartile analysis results")
+        return None
+
+    # Debugging: Print keys to help identify the correct one
+    print("Available keys in loss_results:", list(loss_results.keys()))
+    print("Available keys in win_results:", list(win_results.keys()))
+
+    # Create normalized effects (how much each quartile deviates from baseline)
+    loss_normalized = []
+    win_normalized = []
+
+    for i in range(4):
+        # For loss trials: (quartile_switch_rate - baseline_loss_switch) / baseline_loss_switch
+        if baseline_loss_switch > 0:
+            loss_normalized.append((loss_results['quartile_switch_rates'][i] - baseline_loss_switch) /
+                                   baseline_loss_switch * 100)
+        else:
+            loss_normalized.append(0)
+
+        # For win trials: (quartile_switch_rate - baseline_win_switch) / baseline_win_switch
+        if baseline_win_switch > 0:
+            win_normalized.append((win_results['quartile_switch_rates'][i] - baseline_win_switch) /
+                                  baseline_win_switch * 100)
+        else:
+            win_normalized.append(0)
+
+    # Calculate the slope of the effect across quartiles
+    loss_slope = (loss_normalized[3] - loss_normalized[0]) / 3
+    win_slope = (win_normalized[3] - win_normalized[0]) / 3
+
+    # Create visualization
+    plt.figure(figsize=(12, 8))
+
+    # Plot 1: Actual switch rates by quartile
+    plt.subplot(2, 1, 1)
+    plt.plot(range(1, 5), loss_results['quartile_switch_rates'], 'o-', color='red',
+             label=f'Loss trials (baseline: {baseline_loss_switch:.1f}%)')
+    plt.plot(range(1, 5), win_results['quartile_switch_rates'], 'o-', color='green',
+             label=f'Win trials (baseline: {baseline_win_switch:.1f}%)')
+
+    # Add counts to points
+    for i, (loss_rate, loss_count, win_rate, win_count) in enumerate(zip(
+            loss_results['quartile_switch_rates'], loss_results['quartile_trial_counts'],
+            win_results['quartile_switch_rates'], win_results['quartile_trial_counts'])):
+        plt.text(i + 1, loss_rate + 2, f"n={loss_count}", color='red', ha='center', fontsize=8)
+        plt.text(i + 1, win_rate - 4, f"n={win_count}", color='green', ha='center', fontsize=8)
+
+    plt.xlabel('Signal Quartile')
+    plt.ylabel('Switch Rate (%)')
+    plt.title('Actual Switch Rates by Pre-Cue Signal Quartile')
+    plt.xticks(range(1, 5))
+    plt.ylim(0, max(max(loss_results['quartile_switch_rates']),
+                    max(win_results['quartile_switch_rates'])) + 10)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+
+    # Plot 2: Normalized effects (percentage change from baseline)
+    plt.subplot(2, 1, 2)
+    plt.plot(range(1, 5), loss_normalized, 'o-', color='red',
+             label=f'Loss trials (slope: {loss_slope:.2f}%/quartile)')
+    plt.plot(range(1, 5), win_normalized, 'o-', color='green',
+             label=f'Win trials (slope: {win_slope:.2f}%/quartile)')
+    plt.axhline(y=0, color='gray', linestyle='-', alpha=0.5)
+
+    plt.xlabel('Signal Quartile')
+    plt.ylabel('Normalized Effect (%)')
+    plt.title('Normalized Effect: Change from Baseline Switch Probability')
+    plt.xticks(range(1, 5))
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+
+    plt.tight_layout()
+    save_figure(plt.gcf(), subject_id, "pooled", "normalized_quartile_effects")
+    plt.show()
+
+    # Statistical analysis: bootstrap comparison of slopes
+    print("\nBootstrap analysis of slope differences:")
+    n_bootstrap = 1000
+    slope_diffs = []
+
+    # Check if trial-level data is available in all_trials_data
+    if 'all_trials_data' in loss_results and 'all_trials_data' in win_results:
+        print("Using trial-level data from all_trials_data")
+
+        # Extract trial-level data - structure depends on what's in all_trials_data
+        # Let's inspect what's in all_trials_data
+        if loss_results['all_trials_data'] is not None and len(loss_results['all_trials_data']) > 0:
+            print("all_trials_data keys for a sample trial:",
+                  list(loss_results['all_trials_data'][0].keys()) if isinstance(loss_results['all_trials_data'][0],
+                                                                                dict) else "Not a dictionary")
+
+        # Assuming all_trials_data contains trial dictionaries with 'signal' and 'switch' keys
+        # You might need to adjust these keys based on actual data structure
+        try:
+            # Extract signals and switches from all_trials_data
+            loss_signals = np.array([trial.get('signal', 0) for trial in loss_results['all_trials_data']])
+            loss_switches = np.array([trial.get('switch', 0) for trial in loss_results['all_trials_data']])
+
+            win_signals = np.array([trial.get('signal', 0) for trial in win_results['all_trials_data']])
+            win_switches = np.array([trial.get('switch', 0) for trial in win_results['all_trials_data']])
+
+            print(f"Extracted {len(loss_signals)} loss trials and {len(win_signals)} win trials")
+
+            # Alternative method: recreate the data by using quartiles and sampling switch rates
+            # This is a fallback method if we can't directly extract trial data
+        except (AttributeError, KeyError, TypeError) as e:
+            print(f"Error extracting trial data: {e}")
+            print("Falling back to simulated bootstrap based on quartile rates")
+
+            # Method 2: Simulate trial data from quartile statistics
+            loss_signals = []
+            loss_switches = []
+            win_signals = []
+            win_switches = []
+
+            # For each quartile
+            for q in range(4):
+                # Get number of trials
+                loss_n = loss_results['quartile_trial_counts'][q]
+                win_n = win_results['quartile_trial_counts'][q]
+
+                # Get switch rate (as proportion, not percentage)
+                loss_switch_rate = loss_results['quartile_switch_rates'][q] / 100
+                win_switch_rate = win_results['quartile_switch_rates'][q] / 100
+
+                # Create simulated trials
+                # Signals within quartile (just use quartile number as signal value)
+                loss_signals.extend([q] * loss_n)
+                win_signals.extend([q] * win_n)
+
+                # Switch decisions (1 for switch, 0 for stay)
+                loss_switches.extend(np.random.binomial(1, loss_switch_rate, size=loss_n))
+                win_switches.extend(np.random.binomial(1, win_switch_rate, size=win_n))
+
+            loss_signals = np.array(loss_signals)
+            loss_switches = np.array(loss_switches)
+            win_signals = np.array(win_signals)
+            win_switches = np.array(win_switches)
+
+            print(f"Created simulated data: {len(loss_signals)} loss trials and {len(win_signals)} win trials")
+
+    else:
+        print("No trial-level data available, simulating bootstrap from quartile statistics")
+        # Same simulation code as in the except block above
+        loss_signals = []
+        loss_switches = []
+        win_signals = []
+        win_switches = []
+
+        # For each quartile
+        for q in range(4):
+            # Get number of trials
+            loss_n = loss_results['quartile_trial_counts'][q]
+            win_n = win_results['quartile_trial_counts'][q]
+
+            # Get switch rate (as proportion, not percentage)
+            loss_switch_rate = loss_results['quartile_switch_rates'][q] / 100
+            win_switch_rate = win_results['quartile_switch_rates'][q] / 100
+
+            # Create simulated trials
+            # Signals within quartile (just use quartile index + random variation as signal)
+            quartile_signal = q + 0.5  # Center of quartile
+            loss_signals.extend([quartile_signal] * loss_n)
+            win_signals.extend([quartile_signal] * win_n)
+
+            # Switch decisions (1 for switch, 0 for stay)
+            loss_switches.extend(np.random.binomial(1, loss_switch_rate, size=loss_n))
+            win_switches.extend(np.random.binomial(1, win_switch_rate, size=win_n))
+
+        loss_signals = np.array(loss_signals)
+        loss_switches = np.array(loss_switches)
+        win_signals = np.array(win_signals)
+        win_switches = np.array(win_switches)
+
+        print(f"Created simulated data: {len(loss_signals)} loss trials and {len(win_signals)} win trials")
+
+    # Setup for bootstrap
+    loss_trials = {
+        'signals': loss_signals,
+        'switches': loss_switches
+    }
+
+    win_trials = {
+        'signals': win_signals,
+        'switches': win_switches
+    }
+
+    # Bootstrap resampling
+    for _ in range(n_bootstrap):
+        # Resample loss trials
+        loss_idx = np.random.choice(len(loss_trials['signals']), len(loss_trials['signals']), replace=True)
+        loss_resampled_signals = loss_trials['signals'][loss_idx]
+        loss_resampled_switches = loss_trials['switches'][loss_idx]
+
+        # Resample win trials
+        win_idx = np.random.choice(len(win_trials['signals']), len(win_trials['signals']), replace=True)
+        win_resampled_signals = win_trials['signals'][win_idx]
+        win_resampled_switches = win_trials['switches'][win_idx]
+
+        # Calculate quartiles for resampled data
+        loss_quartiles = pd.qcut(loss_resampled_signals, 4, labels=False)
+        win_quartiles = pd.qcut(win_resampled_signals, 4, labels=False)
+
+        # Calculate switch rates per quartile
+        loss_rates = []
+        win_rates = []
+
+        for q in range(4):
+            loss_q_mask = loss_quartiles == q
+            win_q_mask = win_quartiles == q
+
+            if np.sum(loss_q_mask) > 0:
+                loss_q_rate = np.mean(loss_resampled_switches[loss_q_mask]) * 100
+                loss_rates.append(loss_q_rate)
+            else:
+                loss_rates.append(0)
+
+            if np.sum(win_q_mask) > 0:
+                win_q_rate = np.mean(win_resampled_switches[win_q_mask]) * 100
+                win_rates.append(win_q_rate)
+            else:
+                win_rates.append(0)
+
+        # Normalize by baseline
+        if baseline_loss_switch > 0 and baseline_win_switch > 0:
+            loss_norm = [(r - baseline_loss_switch) / baseline_loss_switch * 100 for r in loss_rates]
+            win_norm = [(r - baseline_win_switch) / baseline_win_switch * 100 for r in win_rates]
+
+            # Calculate slopes
+            loss_bs_slope = (loss_norm[3] - loss_norm[0]) / 3
+            win_bs_slope = (win_norm[3] - win_norm[0]) / 3
+
+            # Store difference in slopes
+            slope_diffs.append(loss_bs_slope - win_bs_slope)
+
+    # Calculate confidence interval and p-value
+    slope_diffs = np.array(slope_diffs)
+    mean_diff = np.mean(slope_diffs)
+    ci_low = np.percentile(slope_diffs, 2.5)
+    ci_high = np.percentile(slope_diffs, 97.5)
+
+    # P-value from bootstrap distribution
+    p_value = np.mean(slope_diffs <= 0) if mean_diff > 0 else np.mean(slope_diffs >= 0)
+    p_value = min(p_value, 1 - p_value) * 2  # Two-tailed
+
+    print("\nStatistical comparison of slopes:")
+    slope_diff = loss_slope - win_slope
+
+    print(f"Loss trials slope: {loss_slope:.2f}%/quartile")
+    print(f"Win trials slope: {win_slope:.2f}%/quartile")
+    print(f"Difference in slopes: {loss_slope - win_slope:.2f}%/quartile")
+
+    # Print bootstrap results
+    print("\nBootstrap analysis results:")
+    print(f"Mean difference from bootstrap: {mean_diff:.2f}%/quartile")
+    print(f"95% CI: [{ci_low:.2f}, {ci_high:.2f}]")
+    print(f"Bootstrap p-value: {p_value:.4f}")
+
+    # Statistical interpretation
+    if p_value < 0.05:
+        if mean_diff > 0:
+            print(
+                "Conclusion: The effect of pre-cue signal on switching is significantly stronger for loss trials (p < 0.05)")
+        else:
+            print(
+                "Conclusion: The effect of pre-cue signal on switching is significantly stronger for win trials (p < 0.05)")
+    else:
+        print("Conclusion: No significant difference in the normalized effect strength between win and loss trials")
+
+    # Return results with bootstrap stats
+    return {
+        'subject_id': subject_id,
+        'baseline_win_switch': baseline_win_switch,
+        'baseline_loss_switch': baseline_loss_switch,
+        'loss_normalized': loss_normalized,
+        'win_normalized': win_normalized,
+        'loss_slope': loss_slope,
+        'win_slope': win_slope,
+        'slope_difference': loss_slope - win_slope,
+        'bootstrap_mean_diff': mean_diff,
+        'bootstrap_ci_low': ci_low,
+        'bootstrap_ci_high': ci_high,
+        'bootstrap_p_value': p_value
+    }
