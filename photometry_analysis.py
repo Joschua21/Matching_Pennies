@@ -22,7 +22,7 @@ post_cue_samples = int(post_cue_time * sampling_rate)
 total_window_samples = pre_cue_samples + post_cue_samples
 
 PARQUET_PATH = r"Z:\delab\matchingpennies\matchingpennies_datatable.parquet"
-CODE_VERSION = "1.0.4"  # Increment this when making analysis changes --> will force recomputation of all data
+CODE_VERSION = "1.0.9"  # Increment this when making analysis changes --> will force recomputation of all data
 _SESSION_CACHE = {}
 
 
@@ -55,16 +55,78 @@ def get_output_path(subject_id, session_date):
     return session_dir
 
 
-def load_behavior_data(subject_id, session_date):
-    """Load behavioral data from Parquet and filter it by subject and session date. Ignore any session where "ignore" is not 0
-    Calculates correction of sound_time_stamps for the lick_time_stamps, so epochs are aligned by moment of first lick"""
-
+def load_filtered_behavior_data(protocol_filter="MatchingPennies", subject_id=None, ignore=0, behavior_df=None):
+    """
+    Load behavioral data, filtering for a specific protocol, subject, and ignore status.
+    Returns the filtered DataFrame for reuse across functions.
+    
+    Parameters:
+    -----------
+    protocol_filter : str, optional
+        String that must be contained in protocol name
+    subject_id : str, optional
+        If provided, filter for this specific subject
+    ignore : int or None, optional
+        If provided, filter for this ignore value (default=0)
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded dataframe to filter instead of loading from parquet
+        
+    Returns:
+    --------
+    pandas.DataFrame: Filtered behavioral data
+    """
     try:
-        # Load the parquet file with pyarrow
-        df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+        if behavior_df is None:
+            # Load from parquet if no dataframe provided
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+        else:
+            # Use the provided dataframe
+            df = behavior_df.copy()
+            if 'date' in df.columns and df['date'].dtype != str:
+                df['date'] = df['date'].astype(str)
+        
+        # Create a mask for protocol filtering
+        mask = df['protocol'].str.contains(protocol_filter, na=False) 
+        
+        # Add ignore filter if provided
+        if ignore is not None:
+            mask &= (df["ignore"] == ignore)
+            
+        # Add subject filter if provided
+        if subject_id is not None:
+            mask &= (df["subjid"] == subject_id)
+            
+        # Apply all filters at once
+        filtered_df = df[mask]
+        
+        # Print summary info
+        source = 'provided dataframe' if behavior_df is not None else 'parquet file'
+        filter_info = f"protocol='{protocol_filter}', ignore={ignore}"
+        if subject_id:
+            filter_info += f", subject='{subject_id}'"
+            
+        print(f"Using {source}: {len(filtered_df)} trials matching {filter_info}")
+        return filtered_df
+    except Exception as e:
+        print(f"Error loading behavioral data: {e}")
+        return None
 
-        df['date'] = df['date'].astype(str)  # Ensure date is a string
-        session_data = df[(df['subjid'] == subject_id) & (df['date'] == session_date) & (df["ignore"] == 0)]
+def load_behavior_data(subject_id, session_date, behavior_df=None):
+    """Load behavioral data for a specific subject and session date"""
+    try:
+        if behavior_df is None:
+            # Load the parquet file with pyarrow
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)  # Ensure date is a string
+        else:
+            # Use the provided dataframe
+            df = behavior_df.copy()
+            if df['date'].dtype != str:
+                df['date'] = df['date'].astype(str)
+                
+        session_data = df[(df['subjid'] == subject_id) & (df['date'] == session_date)]
+        
         if session_data.empty:
             print(f"No behavioral data found for {subject_id} on {session_date}")
 
@@ -83,7 +145,7 @@ def load_behavior_data(subject_id, session_date):
     except Exception as e:
         print(f"Error loading behavioral data: {e}")
         return None
-
+    
 
 def find_pkl_file(directory):
     """Find the first .pkl file in the given directory"""
@@ -143,13 +205,15 @@ def save_figure(fig, subject_id, session_date, fig_name="figure"):
         print(f"Error saving figure: {e}")
 
 
-def process_session(subject_id, session_date, force_recompute=False, use_global_cache=True):
+def process_session(subject_id, session_date, force_recompute=False, use_global_cache=True, behavior_df=None):
     """Process a single session for a given subject"""
+
 
     cache_key = f"{subject_id}/{session_date}"
     if use_global_cache and cache_key in _SESSION_CACHE and not force_recompute:
         return _SESSION_CACHE[cache_key]
     
+    # Then check saved results
     if not force_recompute:
         saved_result = check_saved_results(subject_id, session_date)  
         if saved_result is not None:
@@ -176,7 +240,7 @@ def process_session(subject_id, session_date, force_recompute=False, use_global_
         num_trials = len(pulse_indices)
         print(f"{subject_id}/{session_date}: Found {num_trials} pulse indices")
 
-        behavior_data = load_behavior_data(subject_id, session_date)
+        behavior_data = load_behavior_data(subject_id, session_date, behavior_df)
         if behavior_data is None:
             print(f"Warning: No behavioral data found for {subject_id} on {session_date}")
             return None
@@ -309,19 +373,19 @@ def plot_session_results(analysis_result, show_heatmap=False, win_loss=False, sa
     ax1.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     ax1.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
 
-    ax1.set_xlabel('Time (s)', fontsize=12)
-    ax1.set_ylabel('ΔF/F', fontsize=12)
+    ax1.set_xlabel('Time (s)', fontsize=16)
+    ax1.set_ylabel('ΔF/F', fontsize=16)
     ax1.set_title(f'Photometry Response: {analysis_result["subject_id"]} - {analysis_result["session_date"]}',
-                  fontsize=14)
+                  fontsize=20)
     ax1.set_xlim([-pre_cue_time, post_cue_time])
-    ax1.legend(loc='upper right')
+    ax1.legend(loc='upper right', fontsize=16)
 
     # Add statistics text box
     stats_text = (f"Trials: {len(analysis_result['non_m_trials'])} (excluding missed trials)\n"
                   f"Peak: {np.max(analysis_result['trial_average']):.4f}\n"
                   f"Baseline: {np.mean(analysis_result['trial_average'][:pre_cue_samples]):.4f}")
     ax1.text(-pre_cue_time + 0.2, np.max(analysis_result['trial_average']) * 0.9, stats_text,
-             bbox=dict(facecolor='white', alpha=0.7))
+             bbox=dict(facecolor='white', alpha=0.7), fontsize=16)
 
     # Second subplot: Heatmap (if enabled)
     if show_heatmap:
@@ -333,9 +397,9 @@ def plot_session_results(analysis_result, show_heatmap=False, win_loss=False, sa
                         cmap='viridis',
                         interpolation='nearest')
 
-        ax2.set_xlabel('Time (s)', fontsize=12)
-        ax2.set_ylabel('Trial Number', fontsize=12)
-        ax2.set_title('Trial-by-Trial Heatmap', fontsize=14)
+        ax2.set_xlabel('Time (s)', fontsize=16)
+        ax2.set_ylabel('Trial Number', fontsize=16)
+        ax2.set_title('Trial-by-Trial Heatmap', fontsize=20)
         ax2.axvline(x=0, color='red', linestyle='--', linewidth=1.5)
 
         # Add colorbar
@@ -389,9 +453,8 @@ def save_pooled_results(result, subject_id, win_loss=False):
     except Exception as e:
         print(f"Error saving pooled results: {e}")
 
-
-def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=None):
-    """Analyze and visualize pooled data for a subject without loading from saved files"""
+def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=None, show_session_traces=False, behavior_df=None):
+    """Analyze and visualize pooled data for a subject"""
     # Create figure if not provided
     if fig is None:
         fig = plt.figure(figsize=(12, 7))
@@ -400,82 +463,95 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
     if not force_recompute:
         saved_results = check_saved_pooled_results(subject_id, win_loss)
         if saved_results is not None:
-            # Recreate the figure from saved results
+            print(f"Using saved results for {subject_id}")
+            
+            # Create a visualization with saved data
+            # This way, we can control show_session_traces without recomputing
+            time_axis = saved_results['time_axis']
+            
+            # Create a new figure for the visualization
             plt.figure(figsize=(12, 7))
-
+            
+            # Optionally plot session traces
+            if show_session_traces and 'session_averages' in saved_results:
+                blue_colors = plt.cm.Blues(np.linspace(0.3, 1, len(saved_results['session_dates'])))
+                for idx, (session_date, session_avg) in enumerate(zip(saved_results['session_dates'], saved_results['session_averages'])):
+                    plt.plot(time_axis, session_avg,
+                            alpha=0.6, linewidth=1, linestyle='-',
+                            color=blue_colors[idx],
+                            label=f"Session {session_date}")
+            
+            # Plot the main data (win/loss or average)
             if win_loss:
-                # Rewarded data
-                if saved_results.get('rewarded_avg') is not None:
-                    rewarded_avg = saved_results['rewarded_avg']
-                    rewarded_sem = saved_results['rewarded_sem']
-                    plt.fill_between(saved_results['time_axis'],
-                                    rewarded_avg - rewarded_sem,
-                                    rewarded_avg + rewarded_sem,
-                                    color='lightgreen', alpha=0.4, label='Rewarded ± SEM')
-                    plt.plot(saved_results['time_axis'], rewarded_avg,
-                            color='green', linewidth=2.5, label='Rewarded Avg')
+                if saved_results['rewarded_avg'] is not None:
+                    plt.fill_between(time_axis, 
+                                   saved_results['rewarded_avg'] - saved_results['rewarded_sem'],  
+                                   saved_results['rewarded_avg'] + saved_results['rewarded_sem'],  
+                                   color='lightgreen', alpha=0.4, label='Rewarded ± SEM')  
+                    plt.plot(time_axis, saved_results['rewarded_avg'], 
+                           color='green', linewidth=2.5, label='Rewarded Avg')
 
-                # Unrewarded data
-                if saved_results.get('unrewarded_avg') is not None:
-                    unrewarded_avg = saved_results['unrewarded_avg']
-                    unrewarded_sem = saved_results['unrewarded_sem']
-                    plt.fill_between(saved_results['time_axis'],
-                                    unrewarded_avg - unrewarded_sem,
-                                    unrewarded_avg + unrewarded_sem,
-                                    color='lightsalmon', alpha=0.4, label='Unrewarded ± SEM')
-                    plt.plot(saved_results['time_axis'], unrewarded_avg,
-                            color='darkorange', linewidth=2.5, label='Unrewarded Avg')
+                if saved_results['unrewarded_avg'] is not None:
+                    plt.fill_between(time_axis, 
+                                   saved_results['unrewarded_avg'] - saved_results['unrewarded_sem'],  
+                                   saved_results['unrewarded_avg'] + saved_results['unrewarded_sem'],  
+                                   color='lightsalmon', alpha=0.4, label='Unrewarded ± SEM')  
+                    plt.plot(time_axis, saved_results['unrewarded_avg'], 
+                           color='darkorange', linewidth=2.5, label='Unrewarded Avg')
             else:
-                pooled_sem = saved_results['pooled_sem']
-                plt.fill_between(saved_results['time_axis'],
-                                 saved_results['pooled_average'] - pooled_sem,  
-                                 saved_results['pooled_average'] + pooled_sem,  
-                                 color='lightgreen', alpha=0.4,
-                                 label='Mean ± SEM')  
-
-                # Plot session averages
-            num_sessions = len(saved_results['session_dates'])
-            blue_colors = plt.cm.Blues(np.linspace(0.3, 1, num_sessions))
-
-            for idx, session_avg in enumerate(saved_results.get('session_averages', [])):
-                plt.plot(saved_results['time_axis'], session_avg,
-                         alpha=0.6, linewidth=1, linestyle='-',
-                         color=blue_colors[idx],
-                         label=f"Session {saved_results['session_dates'][idx]}" if idx < 5 else "_nolegend_")
-
+                plt.fill_between(time_axis,
+                               saved_results['pooled_average'] - saved_results['pooled_sem'],  
+                               saved_results['pooled_average'] + saved_results['pooled_sem'],  
+                               color='lightgreen', alpha=0.4,
+                               label='Mean ± SEM')  
+                plt.plot(time_axis, saved_results['pooled_average'], 
+                       color='green', linewidth=2.5, label='Overall Avg')
+            
+            # Add vertical line at cue onset
             plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
             plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
-
-            plt.xlabel('Time (s)', fontsize=12)
-            plt.ylabel('ΔF/F', fontsize=12)
-            plt.title(f'Pooled Photometry Response: {subject_id} ({len(saved_results["session_dates"])} sessions)',
-                      fontsize=14)
+            
+            # Labels and formatting
+            plt.xlabel('Time (s)', fontsize=16)
+            plt.ylabel('ΔF/F', fontsize=16)
+            plt.title(f'Pooled Photometry Response: {subject_id} ({len(saved_results["session_dates"])} sessions)', fontsize=14)
             plt.xlim([-pre_cue_time, post_cue_time])
-
-            # Recreate the stats text box
-            stats_text = (f"Total Sessions: {len(saved_results['session_dates'])}\n"
-                          f"Total Trials: {saved_results['total_trials']}\n"
-                          f"Peak: {np.max(saved_results['pooled_average']):.4f}\n"
-                          f"Baseline: {np.mean(saved_results['pooled_average'][:pre_cue_samples]):.4f}")
-            plt.text(-pre_cue_time + 0.2, np.max(saved_results['pooled_average']) * 1.2, stats_text,
-                     bbox=dict(facecolor='white', alpha=0.7))
-
-            # Limit legend items if too many sessions
-            if len(saved_results['session_dates']) > 5:
+            
+            # Fix the legend - limit session traces if too many
+            if show_session_traces and 'session_dates' in saved_results and len(saved_results['session_dates']) > 5:
                 handles, labels = plt.gca().get_legend_handles_labels()
-                limited_handles = handles[:8]
-                limited_labels = labels[:8]
-                limited_labels.append(f"+ {len(saved_results['session_dates']) - 5} more sessions")
-                plt.legend(limited_handles, limited_labels, loc='upper right', fontsize=10)
+                # Find how many session labels we have
+                session_handles = [h for h, l in zip(handles, labels) if l.startswith("Session")]
+                non_session_handles = [h for h, l in zip(handles, labels) if not l.startswith("Session")]
+                session_labels = [l for l in labels if l.startswith("Session")]
+                non_session_labels = [l for l in labels if not l.startswith("Session")]
+                
+                # Only keep the first 5 session labels
+                limited_session_handles = session_handles[:5]
+                limited_session_labels = session_labels[:5]
+
+                # Show limited legend
+                plt.legend(limited_session_handles + non_session_handles, 
+                          limited_session_labels + non_session_labels, 
+                          loc='upper right', fontsize=10)
             else:
                 plt.legend(loc='upper right', fontsize=10)
-
+                
             plt.tight_layout()
-
-            # Save figure
-            save_figure(plt.gcf(), subject_id, "pooled",
-                        f"pooled_results{'_winloss' if win_loss else ''}")
-
+            
+            # Add statistics - count only non-'M' trials
+            total_trials = saved_results['total_trials']
+            stats_text = (f"Total Sessions: {len(saved_results['session_dates'])}\n"
+                        f"Total Trials: {total_trials} (excluding 'M' choices)\n"
+                        f"Peak: {np.max(saved_results['pooled_average']):.4f}\n"
+                        f"Baseline: {np.mean(saved_results['pooled_average'][:pre_cue_samples]):.4f}")
+            plt.text(-pre_cue_time + 0.2, saved_results['pooled_average'].max() * 1.2, stats_text,
+                   bbox=dict(facecolor='white', alpha=0.7))
+            
+            # Save the figure with appropriate suffix
+            trace_suffix = "_with_sessions" if show_session_traces else ""
+            save_figure(plt.gcf(), subject_id, "pooled", f"pooled_results{trace_suffix}{'_winloss' if win_loss else ''}")
+            
             plt.show()
             return saved_results
 
@@ -491,10 +567,29 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
     session_dates = []
     session_averages = []
 
+    # Get matching pennies sessions from behavior dataframe if provided, otherwise load from parquet
+    matching_pennies_sessions = set()
+    try:
+        if behavior_df is not None:
+            # If behavior_df is provided, filter it for this subject
+            subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
+        else:
+            # Otherwise load from parquet file
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            subject_data = df[(df['subjid'] == subject_id) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} from parquet file")
+    except Exception as e:
+        print(f"Warning: Could not load session info: {e}")
+
     # Sort sessions chronologically
     sessions = sorted([d for d in os.listdir(subject_dir)
                       if os.path.isdir(os.path.join(subject_dir, d)) and
-                      os.path.exists(os.path.join(subject_dir, d, "deltaff.npy"))])
+                      os.path.exists(os.path.join(subject_dir, d, "deltaff.npy")) and
+                      (d in matching_pennies_sessions or not matching_pennies_sessions)])
     
     num_sessions = len(sessions)
     blue_colors = plt.cm.Blues(np.linspace(0.3, 1, num_sessions))  # Create blue gradient
@@ -503,7 +598,8 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
         session_path = os.path.join(subject_dir, session_date)
         if os.path.isdir(session_path) and os.path.exists(os.path.join(session_path, "deltaff.npy")):
             print(f"Processing {subject_id}/{session_date}...")
-            result = process_session(subject_id, session_date)
+            # Pass behavior_df to process_session to reuse data
+            result = process_session(subject_id, session_date, behavior_df=behavior_df)
             if result:
                 if len(result['non_m_trials']) < 100:
                     print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(result['non_m_trials'])}).")
@@ -528,11 +624,10 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
 
     rewarded_avg = None
     unrewarded_avg = None
+    rewarded_data = []
+    unrewarded_data = []
 
     if win_loss:
-        rewarded_data = []
-        unrewarded_data = []
-
         for session in all_sessions:
             non_m_indices = np.array(
                 [i for i, idx in enumerate(session["valid_trials"]) if idx in session["non_m_trials"]])
@@ -549,7 +644,7 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
                 if len(session_unrewarded) > 0:
                     unrewarded_data.append(session_unrewarded)
 
-            # Filter out empty arrays before stacking
+        # Filter out empty arrays before stacking
         rewarded_data = np.vstack(rewarded_data) if rewarded_data else np.array([])
         unrewarded_data = np.vstack(unrewarded_data) if unrewarded_data else np.array([])
 
@@ -579,22 +674,24 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
                          pooled_average + pooled_sem,  
                          color='lightgreen', alpha=0.4,
                          label='Mean ± SEM')  
+        plt.plot(time_axis, pooled_average, color='green', linewidth=2.5, label='Overall Avg')
 
-    # Plot individual session averages with blue gradient
-    for idx, (session_date, session_avg) in enumerate(zip(session_dates, session_averages)):
-        plt.plot(time_axis, session_avg,
-                 alpha=0.6, linewidth=1, linestyle='-',
-                 color=blue_colors[idx],  # Use blue gradient
-                 label=f"Session {session_date}")
-
-        # Add a vertical line at the cue onset (time=0)
+    if show_session_traces:
+        # Plot individual session averages with blue gradient
+        for idx, (session_date, session_avg) in enumerate(zip(session_dates, session_averages)):
+            plt.plot(time_axis, session_avg,
+                     alpha=0.6, linewidth=1, linestyle='-',
+                     color=blue_colors[idx],  # Use blue gradient
+                     label=f"Session {session_date}")
+            
+    # Add a vertical line at the cue onset (time=0)
     plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
 
     # Labels and formatting
-    plt.xlabel('Time (s)', fontsize=12)
-    plt.ylabel('ΔF/F', fontsize=12)
-    plt.title(f'Pooled Photometry Response: {subject_id} ({len(all_sessions)} sessions)', fontsize=14)
+    plt.xlabel('Time (s)', fontsize=16)
+    plt.ylabel('ΔF/F', fontsize=16)
+    plt.title(f'Pooled Photometry Response: {subject_id} ({len(all_sessions)} sessions)', fontsize=20)
     plt.xlim([-pre_cue_time, post_cue_time])
 
     # Limit legend items if too many sessions
@@ -602,10 +699,9 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
         handles, labels = plt.gca().get_legend_handles_labels()
         limited_handles = handles[:8]
         limited_labels = labels[:8]
-        limited_labels.append(f"+ {len(all_sessions) - 5} more sessions")
-        plt.legend(limited_handles, limited_labels, loc='upper right', fontsize=10)
+        plt.legend(limited_handles, limited_labels, loc='upper right', fontsize=16)
     else:
-        plt.legend(loc='upper right', fontsize=10)
+        plt.legend(loc='upper right', fontsize=16)
 
     plt.tight_layout()
 
@@ -639,7 +735,8 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
     save_pooled_results(pooled_result, subject_id, win_loss)
 
     # Save the figure
-    save_figure(plt.gcf(), subject_id, "pooled", f"pooled_results{'_winloss' if win_loss else ''}")
+    trace_suffix = "_with_sessions" if show_session_traces else ""
+    save_figure(plt.gcf(), subject_id, "pooled", f"pooled_results{trace_suffix}{'_winloss' if win_loss else ''}")
 
     plt.show()
     return pooled_result
@@ -746,7 +843,6 @@ def select_and_visualize(show_heatmap=False, win_loss=False, force_recompute=Fal
         return
 
 
-# Function aliases with clear names for Jupyter notebook cells
 def analyze_specific_session(subject_id, session_date, show_heatmap=False, win_loss=False):
     """Analyze and visualize a specific session"""
     print(f"Analyzing session {subject_id}/{session_date}...")
@@ -756,10 +852,11 @@ def analyze_specific_session(subject_id, session_date, show_heatmap=False, win_l
     return None
 
 
-def pooled_results(subject_id, win_loss=False):
+def pooled_results(subject_id, win_loss=False, force_recompute=False, show_session_traces=False, behavior_df=None):
     """Analyze and visualize pooled results for a subject"""
     print(f"Analyzing pooled results for subject {subject_id}...")
-    return analyze_pooled_data(subject_id, win_loss=win_loss)
+    return analyze_pooled_data(subject_id, win_loss=win_loss, force_recompute=force_recompute,
+                               show_session_traces=show_session_traces, behavior_df=behavior_df)
 
 
 def all_results(win_loss=False, force_recompute=False):
@@ -768,9 +865,24 @@ def all_results(win_loss=False, force_recompute=False):
     return analyze_all_subjects(win_loss=win_loss, force_recompute=force_recompute)
 
 
-def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False):
+def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False, behavior_df=None):
     """
     Analyze photometry signals binned by reward rate quartiles for a single session or pooled across sessions
+    
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    session_date : str, optional
+        Specific session to analyze. If None, analyze all sessions.
+    win_loss : bool, optional
+        Whether to split by rewarded/unrewarded trials
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from parquet
+        
+    Returns:
+    --------
+    dict: Analysis results including quartile bins and signal data
     """
     all_plotting_data = []
     all_reward_rates = []
@@ -781,13 +893,32 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False)
     if session_date is None:
         # Get all sessions for pooled analysis
         subject_path = os.path.join(base_dir, subject_id)
+        matching_pennies_sessions = set()
+        try:
+            if behavior_df is not None:
+                # If behavior_df is provided, filter it for this subject
+                subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+                matching_pennies_sessions = set(subject_data['date'].unique())
+                print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
+            else:
+                # Otherwise load from parquet file
+                df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+                df['date'] = df['date'].astype(str)
+                subject_data = df[(df['subjid'] == subject_id) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+                matching_pennies_sessions = set(subject_data['date'].unique())
+                print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} from parquet file")
+        except Exception as e:
+            print(f"Warning: Could not load session info: {e}")
+
         sessions = sorted([d for d in os.listdir(subject_path)
-                         if os.path.isdir(os.path.join(subject_path, d)) and
-                         os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+                if os.path.isdir(os.path.join(subject_path, d)) and
+                os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                d in matching_pennies_sessions])
         
         # Process each session separately to maintain session-specific reward rate context
         for session_date in sessions:
-            session_result = process_session(subject_id, session_date)
+            # Pass behavior_df to process_session to reuse data
+            session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
             if not session_result:
                 continue
 
@@ -798,7 +929,7 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False)
             # Calculate reward rates for this session
             behavior_data = session_result['behavioral_data']
             rewards = np.array(behavior_data['reward'])
-            window_size = max(int(len(rewards) * 0.1), 1)
+            window_size = 20
             reward_rates = []
             overall_rate = np.mean(rewards)
 
@@ -810,7 +941,7 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False)
                 else:
                     rate = np.mean(rewards[i - window_size + 1:i + 1])
                 reward_rates.append(rate)
-            
+
             # Get valid trials
             non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
                                     if idx in session_result["non_m_trials"]])
@@ -828,14 +959,14 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False)
 
     else:
         # Single session analysis
-        session_result = process_session(subject_id, session_date)
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
         if not session_result:
             print(f"Could not process session {subject_id}/{session_date}")
             return None
 
         behavior_data = session_result['behavioral_data']
         rewards = np.array(behavior_data['reward'])
-        window_size = max(int(len(rewards) * 0.1), 1)
+        window_size = 20
         reward_rates = []
         overall_rate = np.mean(rewards)
 
@@ -855,7 +986,7 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False)
         reward_rates = np.array(reward_rates)[non_m_indices]
         reward_outcomes = session_result["reward_outcomes"][non_m_indices]
         time_axis = session_result['time_axis']
-        plot_title = f'Photometry by Reward Rate Quartiles: {subject_id} - {session_date}'
+        plot_title = f'LC Signal by Reward Rate Quartiles: {subject_id} - {session_date}'
 
     # Create quartile bins based on all reward rates
     quartile_bins = pd.qcut(reward_rates, q=4, labels=False)
@@ -914,15 +1045,15 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False)
 
     plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
-    plt.xlabel('Time (s)', fontsize=12)
-    plt.ylabel('ΔF/F', fontsize=12)
-    plt.title(plot_title, fontsize=14)
+    plt.xlabel('Time (s)', fontsize=16)
+    plt.ylabel('ΔF/F', fontsize=16)
+    plt.title(plot_title, fontsize=20)
     plt.xlim([-pre_cue_time, post_cue_time])
-    plt.legend(loc='upper right')
+    plt.legend(loc='upper right', fontsize=16)
     
     # Add text with quartile averages at the bottom of the plot
     quartile_text = "Average reward rates: " + ", ".join([f"Q{q+1}: {avg:.4f}" for q, avg in enumerate(quartile_averages)])
-    plt.figtext(0.5, 0.01, quartile_text, ha='center', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+    plt.figtext(0.5, 0.01, quartile_text, ha='center', fontsize=16, bbox=dict(facecolor='white', alpha=0.8))
 
     plt.tight_layout(rect=[0, 0.05, 1, 1])  # Make room for the text at the bottom
 
@@ -933,13 +1064,7 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False)
 
     plt.show()
 
-    return {
-        'quartile_bins': quartile_bins,
-        'reward_rates': reward_rates
-    }
-
-
-def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=False):
+def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=False, behavior_df=None):
     """
     Analyze photometry signals binned by computer confidence quartiles for a single session or pooled across sessions
 
@@ -951,6 +1076,8 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
         Specific session to analyze. If None, analyze all sessions.
     win_loss : bool, optional
         Whether to split by rewarded/unrewarded trials
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from parquet
 
     Returns:
     --------
@@ -965,13 +1092,32 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
     if session_date is None:
         # Get all sessions for pooled analysis
         subject_path = os.path.join(base_dir, subject_id)
+        matching_pennies_sessions = set()
+        try:
+            if behavior_df is not None:
+                # If behavior_df is provided, filter it for this subject
+                subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+                matching_pennies_sessions = set(subject_data['date'].unique())
+                print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
+            else:
+                # Otherwise load from parquet file
+                df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+                df['date'] = df['date'].astype(str)
+                subject_data = df[(df['subjid'] == subject_id) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+                matching_pennies_sessions = set(subject_data['date'].unique())
+                print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} from parquet file")
+        except Exception as e:
+            print(f"Warning: Could not load session info: {e}")
+
+        # Sort sessions chronologically, filtering to only include MatchingPennies sessions
         sessions = sorted([d for d in os.listdir(subject_path)
-                           if os.path.isdir(os.path.join(subject_path, d)) and
-                           os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+                    if os.path.isdir(os.path.join(subject_path, d)) and
+                    os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                    d in matching_pennies_sessions])
 
         # Process each session separately to maintain session-specific confidence context
         for session_date in sessions:
-            session_result = process_session(subject_id, session_date)
+            session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
             if not session_result:
                 continue
 
@@ -982,16 +1128,24 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
             # Get behavioral data for this session
             behavior_data = session_result['behavioral_data']
 
-            # Load the parquet file to get min_pvalue data
+            # Get p-value data for this session
             try:
-                df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
-                df['date'] = df['date'].astype(str)  # Ensure date is a string
-                session_data = df[(df['subjid'] == subject_id) & (df['date'] == session_date) & (df["ignore"] == 0)]
+                if behavior_df is not None:
+                    # Simply filter from the already filtered dataframe (no need to check protocol again)
+                    session_data = behavior_df[(behavior_df['subjid'] == subject_id) & 
+                                            (behavior_df['date'] == session_date)]
+                else:
+                    # Load from parquet file - this should rarely happen with your new approach
+                    df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+                    df['date'] = df['date'].astype(str)
+                    session_data = df[(df['subjid'] == subject_id) & 
+                                    (df['date'] == session_date) & 
+                                    (df["ignore"] == 0) & 
+                                    (df['protocol'].str.contains('MatchingPennies', na=False))]
 
                 if session_data.empty:
                     print(f"No p-value data found for {subject_id} on {session_date}")
                     continue
-
                 # Extract p-values and calculate confidence
                 p_values = session_data['min_pvalue'].values
                 min_p_value = 1e-12
@@ -999,7 +1153,7 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
                 confidence = -np.log10(p_values)
 
                 # Calculate moving average confidence with window size 15
-                window_size = 15
+                window_size = 20
                 confidence_rates = []
                 overall_confidence = np.mean(confidence)
 
@@ -1034,16 +1188,27 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
 
     else:
         # Single session analysis
-        session_result = process_session(subject_id, session_date)
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
         if not session_result:
             print(f"Could not process session {subject_id}/{session_date}")
             return None
 
-        # Load the parquet file to get min_pvalue data
+        # Get p-value data for this session
         try:
-            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
-            df['date'] = df['date'].astype(str)  # Ensure date is a string
-            session_data = df[(df['subjid'] == subject_id) & (df['date'] == session_date) & (df["ignore"] == 0)]
+            if behavior_df is not None:
+                # Filter from provided dataframe
+                session_data = behavior_df[(behavior_df['subjid'] == subject_id) & 
+                                          (behavior_df['date'] == session_date) & 
+                                          (behavior_df["ignore"] == 0) & 
+                                          (behavior_df['protocol'].str.contains('MatchingPennies', na=False))]
+            else:
+                # Load from parquet file
+                df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+                df['date'] = df['date'].astype(str)  # Ensure date is a string
+                session_data = df[(df['subjid'] == subject_id) & 
+                                 (df['date'] == session_date) & 
+                                 (df["ignore"] == 0) & 
+                                 (df['protocol'].str.contains('MatchingPennies', na=False))]
 
             if session_data.empty:
                 print(f"No p-value data found for {subject_id} on {session_date}")
@@ -1056,7 +1221,7 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
             confidence = -np.log10(p_values)
 
             # Calculate moving average confidence with window size 15
-            window_size = 15
+            window_size = 20
             confidence_rates = []
             overall_confidence = np.mean(confidence)
 
@@ -1077,7 +1242,7 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
             confidence_rates = np.array(confidence_rates)[non_m_indices]
             reward_outcomes = session_result["reward_outcomes"][non_m_indices]
             time_axis = session_result['time_axis']
-            plot_title = f'Photometry by Computer Confidence Quartiles: {subject_id} - {session_date}'
+            plot_title = f'LC Signal by Computer Confidence Quartiles: {subject_id} - {session_date}'
 
         except Exception as e:
             print(f"Error processing p-values for {subject_id}/{session_date}: {e}")
@@ -1159,10 +1324,6 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
 
     plt.show()
 
-    return {
-        'quartile_bins': quartile_bins,
-        'confidence_rates': confidence_rates
-    }
 
 def plot_choice_history(behavior_data, subject_id, session_date):
     # Extract choices and rewards
@@ -1200,7 +1361,8 @@ def plot_choice_history(behavior_data, subject_id, session_date):
     
     return fig
 
-def plot_per_session_win_loss(subject_id):
+
+def plot_per_session_win_loss(subject_id, behavior_df=None):
     """
     Plot win/loss traces for each session of a subject with choice history
     
@@ -1208,6 +1370,8 @@ def plot_per_session_win_loss(subject_id):
     -----------
     subject_id : str
         The identifier for the subject
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from parquet
         
     Returns:
     --------
@@ -1215,9 +1379,30 @@ def plot_per_session_win_loss(subject_id):
     """
     # Find all sessions for the subject
     subject_path = os.path.join(base_dir, subject_id)
+    
+    # Get matching pennies sessions from behavior dataframe if provided, otherwise load from parquet
+    matching_pennies_sessions = set()
+    try:
+        if behavior_df is not None:
+            # If behavior_df is provided, filter it for this subject
+            subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
+        else:
+            # Otherwise load from parquet file
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            subject_data = df[(df['subjid'] == subject_id) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} from parquet file")
+    except Exception as e:
+        print(f"Warning: Could not load session info: {e}")
+
+    # Sort sessions chronologically, filtering to only include MatchingPennies sessions
     sessions = sorted([d for d in os.listdir(subject_path)
                 if os.path.isdir(os.path.join(subject_path, d)) and
-                os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+                os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                d in matching_pennies_sessions])
 
     # Find max peak for consistent y-axis scaling
     max_peak = float('-inf')
@@ -1227,7 +1412,7 @@ def plot_per_session_win_loss(subject_id):
 
     # First pass: find valid sessions and determine y-axis scaling
     for session_date in sessions:
-        session_result = process_session(subject_id, session_date)
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
         if not session_result:
             print(f"Could not process session {subject_id}/{session_date}")
             continue
@@ -1289,7 +1474,8 @@ def plot_per_session_win_loss(subject_id):
         row = i // n_cols  # Row index (integer division)
         col = i % n_cols   # Column index
         
-        session_result = process_session(subject_id, session_date)
+        # Pass behavior_df to process_session to reuse data
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
         if not session_result:
             continue
 
@@ -1394,8 +1580,7 @@ def plot_per_session_win_loss(subject_id):
     
     return session_analyses
 
-
-def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_conf=False, df=None, sem=True):
+def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_conf=False, behavior_df=None, sem=True):
     """
     Analyze win-loss difference across photometry sessions for a subject
 
@@ -1414,17 +1599,21 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_
     --------
     dict: Dictionary of session win-loss difference analyses
     """
-    # If no specific session provided, get all sessions for the subject
     if session_date is None:
-        subject_path = os.path.join(base_dir, subject_id)
-        sessions = sorted([d for d in os.listdir(subject_path)
-                           if os.path.isdir(os.path.join(subject_path, d)) and
-                           os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+        if behavior_df is not None:
+            # Get sessions from the provided dataframe
+            sessions = sorted(behavior_df[behavior_df['subjid'] == subject_id]['date'].unique())
+        else:
+            # Get sessions from the filesystem
+            subject_path = os.path.join(base_dir, subject_id)
+            sessions = sorted([d for d in os.listdir(subject_path)
+                               if os.path.isdir(os.path.join(subject_path, d)) and
+                               os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
     else:
         sessions = [session_date]
 
     # Load dataframe if needed for confidence calculations and not provided
-    if comp_conf and df is None:
+    if comp_conf and behavior_df is None:
         try:
             df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
             df['date'] = df['date'].astype(str)
@@ -1432,6 +1621,8 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_
         except Exception as e:
             print(f"Error loading parquet data: {e}")
             comp_conf = False  # Fallback to chronological sorting
+    else:
+        df = behavior_df  
 
     # Store results for each session
     session_differences = {}
@@ -1440,7 +1631,7 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_
     # Process each session
     for idx, session_date in enumerate(sessions):
         # Process the session
-        session_result = process_session(subject_id, session_date)
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
         if not session_result:
             print(f"Could not process session {subject_id}/{session_date}")
             continue
@@ -1450,7 +1641,7 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_
             continue
 
         # Filter out missed trials
-        non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
+        non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"]) 
                                   if idx in session_result["non_m_trials"]])
 
         # Get reward outcomes and photometry data
@@ -1484,7 +1675,7 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_
         if comp_conf:
             try:
                 # Get data for this session from provided or loaded dataframe
-                session_df = df[(df['subjid'] == subject_id) & (df['date'] == session_date) & (df["ignore"] == 0)]
+                session_df = df[(df['subjid'] == subject_id) & (df['date'] == session_date)]
                 
                 if session_df.empty:
                     print(f"No behavioral data found for {subject_id}/{session_date}")
@@ -1582,8 +1773,8 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
 
     # Labels and formatting
-    plt.xlabel('Time (s)', fontsize=12)
-    plt.ylabel('Rewarded - Unrewarded ΔF/F', fontsize=12)
+    plt.xlabel('Time (s)', fontsize=16)
+    plt.ylabel('Rewarded - Unrewarded ΔF/F', fontsize=16)
     
     sort_type = "Computer Confidence" if comp_conf else "Chronological"
     plt.title(f'Win-Loss Difference: {subject_id} (sorted by {sort_type})', fontsize=14)
@@ -1607,7 +1798,7 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_
     }
 
 
-def analyze_previous_outcome_effect(subject_id):
+def analyze_previous_outcome_effect(subject_id, behavior_df=None):
     """
     Analyze photometry signals based on previous and current trial outcomes.
     
@@ -1615,17 +1806,40 @@ def analyze_previous_outcome_effect(subject_id):
     -----------
     subject_id : str
         The identifier for the subject
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from parquet
         
     Returns:
     --------
     dict: Analysis results
     """
-    # Find all session directories for this subject
-    subject_dir = os.path.join(base_dir, subject_id)
-    if not os.path.exists(subject_dir):
-        print(f"Subject directory not found: {subject_dir}")
-        return None
 
+    subject_path = os.path.join(base_dir, subject_id)
+
+    # Find all session directories for this subject
+    matching_pennies_sessions = set()
+    try:
+        if behavior_df is not None:
+            # If behavior_df is provided, filter it for this subject
+            subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
+        else:
+            # Otherwise load from parquet file
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            subject_data = df[(df['subjid'] == subject_id) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} from parquet file")
+    except Exception as e:
+        print(f"Warning: Could not load session info: {e}")
+
+    # Sort sessions chronologically, filtering to only include MatchingPennies sessions
+    sessions = sorted([d for d in os.listdir(subject_path)
+                    if os.path.isdir(os.path.join(subject_path, d)) and
+                    os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                    d in matching_pennies_sessions])
+    
     # Process each session and collect results
     all_sessions = []
     all_plotting_data = []
@@ -1633,17 +1847,15 @@ def analyze_previous_outcome_effect(subject_id):
     all_curr_rewards = []
     session_dates = []
 
-    # Sort sessions chronologically
-    sessions = sorted([d for d in os.listdir(subject_dir)
-                      if os.path.isdir(os.path.join(subject_dir, d)) and
-                      os.path.exists(os.path.join(subject_dir, d, "deltaff.npy"))])
-    
+
+
     # Process sessions in chronological order
     for session_date in sessions:
-        session_path = os.path.join(subject_dir, session_date)
+        session_path = os.path.join(subject_path, session_date)
         if os.path.isdir(session_path) and os.path.exists(os.path.join(session_path, "deltaff.npy")):
             print(f"Processing {subject_id}/{session_date}...")
-            result = process_session(subject_id, session_date)
+            # Pass behavior_df to process_session to reuse data
+            result = process_session(subject_id, session_date, behavior_df=behavior_df)
             if result:
                 if len(result['non_m_trials']) < 100: 
                     print(f"Skipping {subject_id}/{session_date} due to low number of trials")
@@ -1733,9 +1945,9 @@ def analyze_previous_outcome_effect(subject_id):
     # Define colors and labels
     colors = {
         'prev_win_curr_win': 'darkgreen',
-        'prev_win_curr_loss': 'indianred', 
+        'prev_win_curr_loss': 'firebrick',
         'prev_loss_curr_win': 'mediumseagreen',
-        'prev_loss_curr_loss': 'firebrick'
+        'prev_loss_curr_loss': 'indianred'
     }
     
     labels = {
@@ -1760,28 +1972,20 @@ def analyze_previous_outcome_effect(subject_id):
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
     
     # Labels and formatting
-    plt.xlabel('Time (s)', fontsize=12)
-    plt.ylabel('ΔF/F', fontsize=12)
-    plt.title(f'Photometry by Previous Trial Outcome: {subject_id} ({len(all_sessions)} sessions)', fontsize=14)
+    plt.xlabel('Time (s)', fontsize=16)
+    plt.ylabel('ΔF/F', fontsize=16)
+    plt.title(f'LC Signal by Previous Trial Outcome: {subject_id} ({len(all_sessions)} sessions)', fontsize=20)
     plt.xlim([-pre_cue_time, post_cue_time])
-    plt.legend(loc='upper right')
+    plt.legend(loc='upper right', fontsize=16)
     plt.tight_layout()
     
     # Save the figure
     save_figure(plt.gcf(), subject_id, "pooled", "previous_outcome_effect")
     
     plt.show()
-    
-    # Return analysis results
-    return {
-        'subject_id': subject_id,
-        'session_dates': session_dates,
-        'time_axis': time_axis,
-        'condition_data': condition_data
-    }
 
 
-def analyze_win_stay_lose_switch(subject_id, session_date=None, df=None):
+def analyze_win_stay_lose_switch(subject_id, session_date=None, behavior_df=None):
     """
     Calculate Win-Stay, Lose-Switch statistics for a subject using all behavioral trials
 
@@ -1797,13 +2001,18 @@ def analyze_win_stay_lose_switch(subject_id, session_date=None, df=None):
     dict: Analysis results including WSLS counts and percentages
     """
 
-    if df is None:
-        try: 
-            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+    if behavior_df is not None:
+        df = behavior_df
+        if 'date' in df.columns and df['date'].dtype != str:
             df['date'] = df['date'].astype(str)
+    else:
+        try:
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)  # Ensure date is a string
+            df = df[df['protocol'].str.contains('MatchingPennies', na=False)]
         except Exception as e:
             print(f"Error loading parquet data: {e}")
-            return None
+        df = None  # We'll proceed without state analysis if file can't be loaded
 
     # Store results
     wsls_results = {
@@ -1820,16 +2029,11 @@ def analyze_win_stay_lose_switch(subject_id, session_date=None, df=None):
 
     # Get sessions to analyze
     if session_date is None:
-        # Get all sessions from parquet file for this subject
-        try:
-            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
-            df['date'] = df['date'].astype(str)
-            sessions = df[df['subjid'] == subject_id]['date'].unique()
-        except Exception as e:
-            print(f"Error loading parquet data: {e}")
-            return None
+        # Get all sessions from provided dataframe for this subject
+        sessions = sorted(df[df['subjid'] == subject_id]['date'].unique())
     else:
         sessions = [session_date]
+
 
     # Process each session
     for sess in sessions:
@@ -1837,9 +2041,7 @@ def analyze_win_stay_lose_switch(subject_id, session_date=None, df=None):
         
         # Get behavior data directly from parquet file
         try:
-            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
-            df['date'] = df['date'].astype(str)
-            session_df = df[(df['subjid'] == subject_id) & (df['date'] == sess) & (df['ignore'] == 0)]
+            session_df = df[(df['subjid'] == subject_id) & (df['date'] == sess)]
             
             if session_df.empty:
                 print(f"No behavioral data found for {subject_id}/{sess}")
@@ -1967,29 +2169,12 @@ def analyze_win_stay_lose_switch(subject_id, session_date=None, df=None):
         # Formatting
         plt.xlabel('Session Number')
         plt.ylabel('Percentage (%)')
-        plt.title(f'Win-Stay, Lose-Switch Analysis Across Sessions: {subject_id}')
+        plt.title(f'WSLS Analysis Across Sessions: {subject_id}')
         plt.xticks(session_numbers)
         plt.ylim(0, 100)
         plt.grid(True, alpha=0.3)
         plt.legend()
-        
-        # Add data table below the plot
-        table_data = []
-        for i, s in enumerate(session_data):
-            table_data.append([
-                f"Session {i+1}",
-                f"{s['win_stay_count']}/{s['win_trials']} ({s['win_stay_pct']:.1f}%)",
-                f"{s['lose_switch_count']}/{s['lose_trials']} ({s['lose_switch_pct']:.1f}%)",
-                f"{s['total_wsls_count']}/{s['total_trials']} ({s['wsls_pct']:.1f}%)"
-            ])
-        
-        plt.table(cellText=table_data,
-                  colLabels=['Session', 'Win-Stay', 'Lose-Switch', 'Overall WSLS'],
-                  loc='bottom',
-                  bbox=[0, -0.65, 1, 0.5])
-        
-        plt.subplots_adjust(bottom=0.4)  # Make room for the table
-        
+
         # Save figure
         save_figure(plt.gcf(), subject_id, "all_sessions", "wsls_across_sessions")
         plt.show()
@@ -1999,7 +2184,7 @@ def analyze_win_stay_lose_switch(subject_id, session_date=None, df=None):
     return wsls_results
 
 
-def analyze_loss_streaks_before_win(subject_id, skipped_missed=True, only_1_5=False):
+def analyze_loss_streaks_before_win(subject_id, skipped_missed=True, only_1_5=False, behavior_df=None):
     """
     Analyze photometry signals for loss streaks of different lengths that end with a win.
     This function identifies trials that were not rewarded but where the next trial was rewarded,
@@ -2014,17 +2199,37 @@ def analyze_loss_streaks_before_win(subject_id, skipped_missed=True, only_1_5=Fa
         If False, include missed trials as losses as long as reward=0
     only_1_5 : bool, optional (default=False)
         If True, only plot categories 1 and 5+ (shortest and longest streaks)
-        If False, plot all categories
-
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from parquet
+        
     Returns:
     --------
     dict: Analysis results for different loss streak lengths
     """
     # Find all session directories for this subject
-    subject_dir = os.path.join(base_dir, subject_id)
-    if not os.path.exists(subject_dir):
-        print(f"Subject directory not found: {subject_dir}")
-        return None
+    subject_path = os.path.join(base_dir, subject_id)
+    matching_pennies_sessions = set()
+    try:
+        if behavior_df is not None:
+            # If behavior_df is provided, filter it for this subject
+            subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
+        else:
+            # Otherwise load from parquet file
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            subject_data = df[(df['subjid'] == subject_id) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} from parquet file")
+    except Exception as e:
+        print(f"Warning: Could not load session info: {e}")
+
+    # Sort sessions chronologically, filtering to only include MatchingPennies sessions
+    sessions = sorted([d for d in os.listdir(subject_path)
+                    if os.path.isdir(os.path.join(subject_path, d)) and
+                  os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                  d in matching_pennies_sessions])
 
     # Store data for each loss streak category
     streak_data = {
@@ -2035,17 +2240,12 @@ def analyze_loss_streaks_before_win(subject_id, skipped_missed=True, only_1_5=Fa
         '5plus_loss': []  # T0 loss preceded by 4+ losses
     }
 
-    # Sort sessions chronologically
-    sessions = sorted([d for d in os.listdir(subject_dir)
-                       if os.path.isdir(os.path.join(subject_dir, d)) and
-                       os.path.exists(os.path.join(subject_dir, d, "deltaff.npy"))])
-
     time_axis = None  # Will be set from the first valid session
 
     # Process each session
     for session_date in sessions:
         print(f"Processing {subject_id}/{session_date}...")
-        session_result = process_session(subject_id, session_date)
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
         if not session_result:
             continue
 
@@ -2194,13 +2394,13 @@ def analyze_loss_streaks_before_win(subject_id, skipped_missed=True, only_1_5=Fa
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
 
     # Labels and formatting
-    plt.xlabel('Time (s)', fontsize=12)
-    plt.ylabel('ΔF/F', fontsize=12)
+    plt.xlabel('Time (s)', fontsize=16)
+    plt.ylabel('ΔF/F', fontsize=16)
 
     missed_text = "excluding" if skipped_missed else "including"
     plot_cat_text = "1_and_5" if only_1_5 else "all_cats"
-    plt.title(f'Photometry Signal by Loss Streak Length Before Win: {subject_id} ({missed_text} missed trials)',
-              fontsize=14)
+    plt.title(f'LC Signal for Cumulative Loss: {subject_id}',
+              fontsize=20)
     plt.xlim([-pre_cue_time, post_cue_time])
     plt.legend(loc='upper right')
     plt.tight_layout()
@@ -2228,7 +2428,8 @@ def analyze_loss_streaks_before_win(subject_id, skipped_missed=True, only_1_5=Fa
         'only_1_5': only_1_5
     }
 
-def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False):
+
+def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False, behavior_df=None):
     """
     Create a heatmap visualization of win-loss signal differences across sessions
 
@@ -2245,9 +2446,28 @@ def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False):
     """
     # Get all sessions for the subject
     subject_path = os.path.join(base_dir, subject_id)
+    matching_pennies_sessions = set()
+    try:
+        if behavior_df is not None:
+            # If behavior_df is provided, we assume it's already filtered for MatchingPennies protocol
+            subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} sessions for {subject_id} in provided dataframe")
+        else:
+            # Otherwise load from parquet file with protocol filtering
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            subject_data = df[(df['subjid'] == subject_id) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} from parquet file")
+    except Exception as e:
+        print(f"Warning: Could not load session info: {e}")
+
+    # Sort sessions chronologically, filtering to only include MatchingPennies sessions
     sessions = sorted([d for d in os.listdir(subject_path)
-                       if os.path.isdir(os.path.join(subject_path, d)) and
-                       os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+                    if os.path.isdir(os.path.join(subject_path, d)) and
+                    os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                    d in matching_pennies_sessions])
 
     # Store results for each session
     session_differences = []
@@ -2257,19 +2477,22 @@ def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False):
     session_confidences = {}
 
     # Load parquet data for confidence calculations if needed
-    if comp_conf:
+    if comp_conf and behavior_df is None:
         try:
             df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
             df['date'] = df['date'].astype(str)  # Ensure date is a string
+            df = df[df['protocol'].str.contains('MatchingPennies', na=False)]
             print(f"Loaded parquet data for confidence calculations")
         except Exception as e:
             print(f"Error loading parquet data: {e}")
             comp_conf = False  # Fallback to chronological sorting
+    else:
+        df = behavior_df  
 
     # Process each session
     for session_date in sessions:
         # Process the session
-        session_result = process_session(subject_id, session_date)
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
         if not session_result:
             print(f"Could not process session {subject_id}/{session_date}")
             continue
@@ -2322,7 +2545,7 @@ def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False):
         if comp_conf:
             try:
                 # Get data for this session
-                session_df = df[(df['subjid'] == subject_id) & (df['date'] == session_date) & (df["ignore"] == 0)]
+                session_df = df[(df['subjid'] == subject_id) & (df['date'] == session_date)]
                 
                 if not session_df.empty and 'min_pvalue' in session_df.columns:
                     # Extract p-values
@@ -2414,9 +2637,9 @@ def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False):
 
     # Labels and formatting
     sort_type = "Computer Confidence" if comp_conf else "Chronological (oldest first)"
-    ax_heatmap.set_xlabel('Time (s)', fontsize=12)
-    ax_heatmap.set_ylabel('Session', fontsize=12)
-    ax_heatmap.set_title(f'Win-Loss Signal Difference Across Sessions: {subject_id} (sorted by {sort_type})', fontsize=14)
+    ax_heatmap.set_xlabel('Time (s)', fontsize=16)
+    ax_heatmap.set_ylabel('Session', fontsize=16)
+    ax_heatmap.set_title(f'Win-Loss Signal Difference Across Sessions: {subject_id} (sorted by {sort_type})', fontsize=20)
 
     # Add specific y-tick labels at regular intervals
     tick_step = max(1, len(session_dates) // 10)  # Show at most 10 session labels
@@ -2437,45 +2660,6 @@ def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False):
     cbar = plt.colorbar(im, ax=ax_heatmap)
     cbar.set_label('Win-Loss ΔF/F Difference', fontsize=10)
 
-    # Plot peak differences across sessions (bottom)
-    ax_peaks = fig.add_subplot(gs[1])
-
-    # Create x-axis values (session numbers from 1 to n)
-    session_numbers = np.arange(1, len(session_dates) + 1)
-
-    # Create blue gradient for bars
-    blue_colors = plt.cm.Blues(np.linspace(0.3, 1, len(session_dates)))
-
-    # Plot peak differences
-    ax_peaks.bar(session_numbers, peak_differences, color=blue_colors, alpha=0.7)
-
-    # Add trend line
-    if len(peak_differences) > 1:
-        z = np.polyfit(session_numbers, peak_differences, 1)
-        p = np.poly1d(z)
-        ax_peaks.plot(session_numbers, p(session_numbers), 'r--', linewidth=2,
-                      label=f'Trend: {z[0]:.4f}')
-
-        # Add correlation coefficient
-        corr, p_val = scipy.stats.pearsonr(session_numbers, peak_differences)
-        ax_peaks.text(0.05, 0.95, f'r = {corr:.3f}, p = {p_val:.3f}',
-                      transform=ax_peaks.transAxes, fontsize=10,
-                      verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-
-    # Labels and formatting
-    ax_peaks.set_xlabel('Session Number', fontsize=12)
-    ax_peaks.set_ylabel('Peak Win-Loss Difference', fontsize=12)
-    ax_peaks.set_title('Peak Difference Magnitude by Session', fontsize=14)
-    ax_peaks.set_xticks(session_numbers)
-    ax_peaks.set_xticklabels(session_numbers)  # Use session numbers
-    ax_peaks.grid(True, axis='y', alpha=0.3)
-
-    if len(peak_differences) > 1:
-        ax_peaks.legend(loc='upper left')
-
-    # Adjust layout
-    plt.tight_layout()
-
     # Save figure
     sort_suffix = "by_comp_conf" if comp_conf else "chronological"
     save_figure(fig, subject_id, "all_sessions", f"win_loss_difference_heatmap_{sort_suffix}")
@@ -2493,7 +2677,7 @@ def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False):
     }
 
 
-def analyze_session_average_heatmap(subject_id, comp_conf=False):
+def analyze_session_average_heatmap(subject_id, comp_conf=False, behavior_df=None):
     """
     Create a heatmap visualization of average photometry signals across sessions
 
@@ -2510,9 +2694,30 @@ def analyze_session_average_heatmap(subject_id, comp_conf=False):
     """
     # Get all sessions for the subject
     subject_path = os.path.join(base_dir, subject_id)
+
+    # Get matching pennies sessions from behavior dataframe if provided, otherwise load from parquet
+    matching_pennies_sessions = set()
+    try:
+        if behavior_df is not None:
+            # If behavior_df is provided, filter it for this subject
+            subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
+        else:
+            # Otherwise load from parquet file
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            subject_data = df[(df['subjid'] == subject_id) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} from parquet file")
+    except Exception as e:
+        print(f"Warning: Could not load session info: {e}")
+
+    # Sort sessions chronologically, filtering to only include MatchingPennies sessions
     sessions = sorted([d for d in os.listdir(subject_path)
-                       if os.path.isdir(os.path.join(subject_path, d)) and
-                       os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+                    if os.path.isdir(os.path.join(subject_path, d)) and
+                    os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                    d in matching_pennies_sessions])
 
     # Store results for each session
     session_averages = []
@@ -2522,19 +2727,22 @@ def analyze_session_average_heatmap(subject_id, comp_conf=False):
     session_confidences = {}
 
     # Load parquet data for confidence calculations if needed
-    if comp_conf:
+    if comp_conf and behavior_df is None:
         try:
             df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
             df['date'] = df['date'].astype(str)  # Ensure date is a string
+            df = df[df['protocol'].str.contains('MatchingPennies', na=False)]
             print(f"Loaded parquet data for confidence calculations")
         except Exception as e:
             print(f"Error loading parquet data: {e}")
             comp_conf = False  # Fallback to chronological sorting
+    else:
+        df = behavior_df  
 
     # Process each session
     for session_date in sessions:
         # Process the session
-        session_result = process_session(subject_id, session_date)
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
         if not session_result:
             print(f"Could not process session {subject_id}/{session_date}")
             continue
@@ -2573,7 +2781,7 @@ def analyze_session_average_heatmap(subject_id, comp_conf=False):
         if comp_conf:
             try:
                 # Get data for this session
-                session_df = df[(df['subjid'] == subject_id) & (df['date'] == session_date) & (df["ignore"] == 0)]
+                session_df = df[(df['subjid'] == subject_id) & (df['date'] == session_date)]
                 
                 if not session_df.empty and 'min_pvalue' in session_df.columns:
                     # Extract p-values
@@ -2667,7 +2875,7 @@ def analyze_session_average_heatmap(subject_id, comp_conf=False):
     sort_type = "Computer Confidence" if comp_conf else "Chronological (oldest first)"
     ax_heatmap.set_xlabel('Time (s)', fontsize=12)
     ax_heatmap.set_ylabel('Session', fontsize=12)
-    ax_heatmap.set_title(f'Average Photometry Signal Across Sessions: {subject_id} (sorted by {sort_type})', fontsize=14)
+    ax_heatmap.set_title(f'Average LC Signal Across Sessions: {subject_id} (sorted by {sort_type})', fontsize=20)
 
     # Add specific y-tick labels at regular intervals
     tick_step = max(1, len(session_dates) // 10)  # Show at most 10 session labels
@@ -2688,62 +2896,12 @@ def analyze_session_average_heatmap(subject_id, comp_conf=False):
     cbar = plt.colorbar(im, ax=ax_heatmap)
     cbar.set_label('ΔF/F', fontsize=10)
 
-    # Plot peak averages across sessions (bottom)
-    ax_peaks = fig.add_subplot(gs[1])
-
-    # Create x-axis values (session numbers from 1 to n)
-    session_numbers = np.arange(1, len(session_dates) + 1)
-
-    # Create gradient colors for bars based on peak values
-    norm = plt.Normalize(min(peak_averages), max(peak_averages))
-    colors = plt.cm.viridis(norm(peak_averages))
-
-    # Plot peak averages
-    ax_peaks.bar(session_numbers, peak_averages, color=colors, alpha=0.7)
-
-    # Add trend line
-    if len(peak_averages) > 1:
-        z = np.polyfit(session_numbers, peak_averages, 1)
-        p = np.poly1d(z)
-        ax_peaks.plot(session_numbers, p(session_numbers), 'r--', linewidth=2,
-                      label=f'Trend: {z[0]:.4f}')
-
-        # Add correlation coefficient
-        corr, p_val = scipy.stats.pearsonr(session_numbers, peak_averages)
-        ax_peaks.text(0.05, 0.95, f'r = {corr:.3f}, p = {p_val:.3f}',
-                      transform=ax_peaks.transAxes, fontsize=10,
-                      verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-
-    # Labels and formatting
-    ax_peaks.set_xlabel('Session Number', fontsize=12)
-    ax_peaks.set_ylabel('Peak Signal Amplitude', fontsize=12)
-    ax_peaks.set_title('Peak Signal Magnitude by Session', fontsize=14)
-    ax_peaks.set_xticks(session_numbers)
-    ax_peaks.set_xticklabels(session_numbers)  # Use session numbers
-    ax_peaks.grid(True, axis='y', alpha=0.3)
-
-    if len(peak_averages) > 1:
-        ax_peaks.legend(loc='upper left')
-
-    # Adjust layout
-    plt.tight_layout()
 
     # Save figure
     sort_suffix = "by_comp_conf" if comp_conf else "chronological"
     save_figure(fig, subject_id, "all_sessions", f"average_signal_heatmap_{sort_suffix}")
 
     plt.show()
-
-    # Return analysis results
-    return {
-        'subject_id': subject_id,
-        'session_dates': session_dates,
-        'time_axis': time_axis,
-        'session_averages': session_averages,
-        'peak_averages': peak_averages,
-        'session_confidences': session_confidences if comp_conf else None
-    }
-
 
 def add_statistical_test(subject_id, quartile_labels, all_choice_switches, quartile_trial_counts,
                          quartile_switch_rates):
@@ -2833,7 +2991,7 @@ def add_statistical_test(subject_id, quartile_labels, all_choice_switches, quart
         percent = (switch / total * 100) if total > 0 else 0
         print(f"Quartile {i + 1}:  {switch:6d}   {stay:6d}   {total:5d}   {percent:.1f}%")
 
-def analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue', condition='loss', plot_verification=True):
+def analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue', condition='loss', plot_verification=True, behavior_df=None):
     """
     Analyze trials based on photometry signal in specified time window and determine choice switching behavior.
     Works with both win and loss trials as the condition.
@@ -2882,12 +3040,6 @@ def analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue', con
     # Get time window bounds
     window_start, window_end = time_windows[signal_window]
     
-    # Find all session directories for this subject
-    subject_dir = os.path.join(base_dir, subject_id)
-    if not os.path.exists(subject_dir):
-        print(f"Subject directory not found: {subject_dir}")
-        return None
-    
     # Determine analysis mode based on time window
     is_pre_cue_analysis = signal_window == 'pre_cue'
     
@@ -2896,20 +3048,46 @@ def analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue', con
     all_trial_signals = []       # Average signal in window for selected trials
     all_choice_switches = []     # Boolean: True if switch in choice
     all_next_reward = []         # Boolean: True if next trial rewarded 
+    all_state_probs = []         # Store state probabilities for each trial
     time_axis = None             # Will be set from the first valid session
     
     # Set the reward value we're looking for based on condition
     target_reward = 1 if condition == 'win' else 0
     
-    # Sort sessions chronologically
+    # Find all session directories for this subject
+    subject_dir = os.path.join(base_dir, subject_id)
+    if not os.path.exists(subject_dir):
+        print(f"Subject directory not found: {subject_dir}")
+        return None
+
+    # Get matching pennies sessions from behavior dataframe if provided, otherwise load from parquet
+    matching_pennies_sessions = set()
+    try:
+        if behavior_df is not None:
+            # If behavior_df is provided, filter it for this subject
+            subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
+        else:
+            # Otherwise load from parquet file
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            subject_data = df[(df['subjid'] == subject_id) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} from parquet file")
+    except Exception as e:
+        print(f"Warning: Could not load session info: {e}")
+    
+    # Sort sessions chronologically, filtering to only include MatchingPennies sessions
     sessions = sorted([d for d in os.listdir(subject_dir)
-                       if os.path.isdir(os.path.join(subject_dir, d)) and
-                       os.path.exists(os.path.join(subject_dir, d, "deltaff.npy"))])
+                if os.path.isdir(os.path.join(subject_dir, d)) and
+                os.path.exists(os.path.join(subject_dir, d, "deltaff.npy")) and
+                d in matching_pennies_sessions])
     
     # Process each session
     for session_date in sessions:
         print(f"Processing {subject_id}/{session_date}...")
-        session_result = process_session(subject_id, session_date)
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
         if not session_result:
             continue
             
@@ -2945,6 +3123,25 @@ def analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue', con
         window_idx_start = np.where(time_axis >= window_start)[0][0]
         window_idx_end = np.where(time_axis <= window_end)[0][-1]
         
+        # Get state probabilities for this session if parquet data is available
+        if behavior_df is not None:
+            # Filter from the provided dataframe (which is already filtered by protocol)
+            session_df = behavior_df[(behavior_df['subjid'] == subject_id) & 
+                                    (behavior_df['date'] == session_date)]
+        else:
+            # This is a fallback if no behavior_df is provided
+            try:
+                # Load from parquet file and filter
+                df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+                df['date'] = df['date'].astype(str)
+                session_df = df[(df['subjid'] == subject_id) & 
+                            (df['date'] == session_date) & 
+                            (df["ignore"] == 0) & 
+                            (df['protocol'].str.contains('MatchingPennies', na=False))]
+            except Exception as e:
+                print(f"Error loading parquet data: {e}")
+                session_df = None
+        
         if is_pre_cue_analysis:
             # PRE-CUE ANALYSIS MODE
             # Look at trials AFTER a win/loss and analyze if the choice switched from the previous trial
@@ -2977,11 +3174,20 @@ def analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue', con
                 # Determine if the current choice is different from previous (switched)
                 choice_switched = (non_miss_choices[prev_trial_idx] != non_miss_choices[curr_trial_idx])
                 
+                # Get state probabilities if available
+                state_info = {'p_stochastic': None, 'p_leftbias': None, 'p_rightbias': None}
+                if session_df is not None and i < len(session_df):
+                    # Get state probabilities for this trial
+                    state_info['p_stochastic'] = session_df.iloc[i].get('p_stochastic', None)
+                    state_info['p_leftbias'] = session_df.iloc[i].get('p_leftbias', None) 
+                    state_info['p_rightbias'] = session_df.iloc[i].get('p_rightbias', None)
+                
                 # Store the data
                 all_trials_data.append(curr_photometry)
                 all_trial_signals.append(window_signal)
                 all_choice_switches.append(choice_switched)
                 all_next_reward.append(non_miss_rewards[curr_trial_idx])  # Current trial's reward outcome
+                all_state_probs.append(state_info)
                 
         else:
             # POST-CUE ANALYSIS MODE
@@ -3015,11 +3221,20 @@ def analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue', con
                 # Determine if the next choice is different from current (switched)
                 choice_switched = (non_miss_choices[curr_trial_idx] != non_miss_choices[next_trial_idx])
                 
+                # Get state probabilities if available
+                state_info = {'p_stochastic': None, 'p_leftbias': None, 'p_rightbias': None}
+                if session_df is not None and i < len(session_df):
+                    # Get state probabilities for this trial
+                    state_info['p_stochastic'] = session_df.iloc[i].get('p_stochastic', None)
+                    state_info['p_leftbias'] = session_df.iloc[i].get('p_leftbias', None) 
+                    state_info['p_rightbias'] = session_df.iloc[i].get('p_rightbias', None)
+                
                 # Store the data
                 all_trials_data.append(curr_photometry)
                 all_trial_signals.append(window_signal)
                 all_choice_switches.append(choice_switched)
                 all_next_reward.append(non_miss_rewards[next_trial_idx])  # Next trial's reward outcome
+                all_state_probs.append(state_info)
     
     # Check if we found any valid trials
     if len(all_trials_data) == 0:
@@ -3040,6 +3255,10 @@ def analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue', con
     quartile_trial_counts = []
     quartile_reward_rates = []
     
+    # State threshold analysis per quartile
+    quartile_state_counts = []
+    state_threshold = 0.8  # Threshold for state assignment
+    
     # Process each quartile
     for quartile in range(4):
         quartile_mask = quartile_labels == quartile
@@ -3056,10 +3275,36 @@ def analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue', con
             quartile_switch_rates.append(switch_rate)
             quartile_trial_counts.append(trials_in_quartile)
             quartile_reward_rates.append(reward_rate)
+            
+            # Calculate state proportions for this quartile
+            quartile_states = {'stochastic': 0, 'biased': 0, 'uncertain': 0}
+            quartile_indices = np.where(quartile_mask)[0]
+            
+            for idx in quartile_indices:
+                state_info = all_state_probs[idx]
+                p_stoch = state_info['p_stochastic']
+                p_left = state_info['p_leftbias']
+                p_right = state_info['p_rightbias']
+                
+                # Skip trials with missing state information
+                if p_stoch is None or p_left is None or p_right is None:
+                    quartile_states['uncertain'] += 1
+                    continue
+                
+                # Assign state based on threshold
+                if p_stoch >= state_threshold:
+                    quartile_states['stochastic'] += 1
+                elif p_left >= state_threshold or p_right >= state_threshold:
+                    quartile_states['biased'] += 1
+                else:
+                    quartile_states['uncertain'] += 1
+            
+            quartile_state_counts.append(quartile_states)
         else:
             quartile_switch_rates.append(0)
             quartile_trial_counts.append(0)
             quartile_reward_rates.append(0)
+            quartile_state_counts.append({'stochastic': 0, 'biased': 0, 'uncertain': 0})
             
     # Print results
     outcome_label = "Win" if condition == 'win' else "Loss"
@@ -3081,14 +3326,32 @@ def analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue', con
     print("\nReward Rates by Signal Quartile:")
     for quartile in range(4):
         print(f"Quartile {quartile + 1}: {quartile_reward_rates[quartile]:.1f}% rewarded")
+    
+    # Print state distribution by quartile
+    print("\nState Distribution by Signal Quartile (threshold = 0.8):")
+    for quartile in range(4):
+        states = quartile_state_counts[quartile]
+        total = quartile_trial_counts[quartile]
         
+        if total > 0:
+            # Calculate percentages
+            stoch_pct = (states['stochastic'] / total) * 100
+            biased_pct = (states['biased'] / total) * 100
+            uncertain_pct = (states['uncertain'] / total) * 100
+            
+            print(f"Quartile {quartile + 1}: "
+                  f"Stochastic: {states['stochastic']} ({stoch_pct:.1f}%), "
+                  f"Biased: {states['biased']} ({biased_pct:.1f}%), "
+                  f"Uncertain: {states['uncertain']} ({uncertain_pct:.1f}%)")
+        else:
+            print(f"Quartile {quartile + 1}: No trials")
+    
     # Create verification plot if requested
     if plot_verification:
-        fig = plt.figure(figsize=(15, 10))
-        gs = plt.GridSpec(3, 1, height_ratios=[2, 1, 1], hspace=0.3)
+        # Create a single figure for just the photometry plot (no subplots needed)
+        plt.figure(figsize=(12, 7))
         
-        # Plot average photometry traces by quartile
-        ax1 = fig.add_subplot(gs[0])
+        # Define colors for quartiles
         colors = ['blue', 'green', 'orange', 'red']  # Colors for quartiles
         
         # Plot each quartile's average trace
@@ -3099,85 +3362,42 @@ def analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue', con
                 quartile_avg = np.mean(quartile_data, axis=0)
                 quartile_sem = calculate_sem(quartile_data, axis=0)
                 
-                ax1.fill_between(time_axis,
+                plt.fill_between(time_axis,
                                quartile_avg - quartile_sem,
                                quartile_avg + quartile_sem,
                                color=colors[quartile], alpha=0.3)
-                ax1.plot(time_axis, quartile_avg,
+                plt.plot(time_axis, quartile_avg,
                        color=colors[quartile], linewidth=2,
                        label=f'Quartile {quartile+1} (n={quartile_trial_counts[quartile]})')
                        
         # Highlight the time window used for sorting
-        ax1.axvspan(window_start, window_end, color='gray', alpha=0.3, label='Sorting Window')
+        plt.axvspan(window_start, window_end, color='gray', alpha=0.3, label='Sorting Window')
         
         # Add reference lines
-        ax1.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
-        ax1.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+        plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
         
-        ax1.set_xlabel('Time (s)', fontsize=12)
-        ax1.set_ylabel('ΔF/F', fontsize=12)
-        
-        if is_pre_cue_analysis:
-            ax1.set_title(f'Trials After {outcome_label} Sorted by Pre-Cue Signal: {subject_id}', fontsize=14)
-        else:
-            ax1.set_title(f'{outcome_label} Trials Sorted by {signal_window} Signal: {subject_id}', fontsize=14)
-            
-        ax1.legend(loc='upper right')
-        ax1.set_xlim([-pre_cue_time, post_cue_time])
-        
-        # Plot switch rates by quartile
-        ax2 = fig.add_subplot(gs[1])
-        bars = ax2.bar(range(1, 5), quartile_switch_rates, color=colors, alpha=0.7)
-        
-        # Add trial counts as text on bars
-        for bar, count in zip(bars, quartile_trial_counts):
-            height = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width()/2., height + 2,
-                   f'n={count}', ha='center', va='bottom', fontsize=10)
-                   
-        ax2.set_xlabel('Signal Quartile', fontsize=12)
-        ax2.set_ylabel('Switch Rate (%)', fontsize=12)
+        plt.xlabel('Time (s)', fontsize=12)
+        plt.ylabel('ΔF/F', fontsize=12)
         
         if is_pre_cue_analysis:
-            ax2.set_title(f'% Trials Where Choice Switched From Previous {outcome_label} Trial', fontsize=14)
+            plt.title(f'Trials After {outcome_label} Sorted by Pre-Cue Signal: {subject_id}', fontsize=14)
         else:
-            ax2.set_title('% Trials Where Choice Switched on Next Trial', fontsize=14)
+            plt.title(f'{outcome_label} Trials Sorted by {signal_window} Signal: {subject_id}', fontsize=14)
             
-        ax2.set_ylim(0, 100)
-        ax2.set_xticks(range(1, 5))
-        ax2.set_xticklabels([f'Q{i+1}' for i in range(4)])
-        ax2.grid(True, axis='y', alpha=0.3)
+        plt.legend(loc='upper right')
+        plt.xlim([-pre_cue_time, post_cue_time])
         
-        # Plot reward rates by quartile
-        ax3 = fig.add_subplot(gs[2])
-        bars = ax3.bar(range(1, 5), quartile_reward_rates, color=colors, alpha=0.7)
-        
-        # Add trial counts as text on bars
-        for bar, count in zip(bars, quartile_trial_counts):
-            height = bar.get_height()
-            ax3.text(bar.get_x() + bar.get_width()/2., height + 2,
-                   f'n={count}', ha='center', va='bottom', fontsize=10)
-                   
-        ax3.set_xlabel('Signal Quartile', fontsize=12)
-        ax3.set_ylabel('Reward Rate (%)', fontsize=12)
-        
-        if is_pre_cue_analysis:
-            ax3.set_title('% Trials That Were Rewarded', fontsize=14)
-        else:
-            ax3.set_title('% Next Trials That Were Rewarded', fontsize=14)
-            
-        ax3.set_ylim(0, 100)
-        ax3.set_xticks(range(1, 5))
-        ax3.set_xticklabels([f'Q{i+1}' for i in range(4)])
-        ax3.grid(True, axis='y', alpha=0.3)
-        
-        plt.tight_layout()
-        
+        # Add total trials information as text at the bottom of the plot
+        plt.figtext(0.5, 0.01, f"Total trials analyzed: {len(all_trial_signals)}", 
+                   ha='center', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+
         # Save the figure
         condition_str = condition  # 'win' or 'loss'
         mode_suffix = f"after_{condition_str}" if is_pre_cue_analysis else f"{condition_str}_trials"
-        save_figure(fig, subject_id, "pooled", f"{mode_suffix}_{signal_window}_quartiles")
+        save_figure(plt.gcf(), subject_id, "pooled", f"{mode_suffix}_{signal_window}_quartiles")
         
+        plt.tight_layout(rect=[0, 0.05, 1, 1])  # Make room for the text at the bottom
         plt.show()
 
     # Add statistical analysis if we have enough data
@@ -3201,7 +3421,7 @@ def analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue', con
         'is_pre_cue_analysis': is_pre_cue_analysis
     }
 
-def analyze_switch_probabilities(subject_id, session_date=None):
+def analyze_switch_probabilities(subject_id, session_date=None, behavior_df=None):
     """
     Analyze probability of switching choices following win vs loss trials 
     for a subject, and test if there is a significant difference.
@@ -3228,11 +3448,15 @@ def analyze_switch_probabilities(subject_id, session_date=None):
     
     # Determine which sessions to analyze
     if session_date is None:
-        # Get all sessions for this subject
-        subject_path = os.path.join(base_dir, subject_id)
-        sessions = sorted([d for d in os.listdir(subject_path)
-                         if os.path.isdir(os.path.join(subject_path, d)) and
-                         os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+        if behavior_df is not None:
+            # Extract sessions for this subject from behavior_df
+            sessions = sorted(behavior_df[behavior_df['subjid'] == subject_id]['date'].unique())
+        else:
+            # Get all sessions from the file system
+            subject_path = os.path.join(base_dir, subject_id)
+            sessions = sorted([d for d in os.listdir(subject_path)
+                            if os.path.isdir(os.path.join(subject_path, d)) and
+                            os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
     else:
         sessions = [session_date]
     
@@ -3241,7 +3465,7 @@ def analyze_switch_probabilities(subject_id, session_date=None):
     # Process each session
     for sess in sessions:
         print(f"Processing {subject_id}/{sess}...")
-        session_result = process_session(subject_id, sess)
+        session_result = process_session(subject_id, sess, behavior_df=behavior_df)
         if not session_result:
             continue
             
@@ -3443,7 +3667,7 @@ def analyze_switch_probabilities(subject_id, session_date=None):
     return results
 
 
-def analyze_switch_probability_quartiles(subject_id, session_date=None, win_loss=False):
+def analyze_switch_probability_quartiles(subject_id, session_date=None, win_loss=False, behavior_df=None):
     """
     Analyze photometry signals binned by switch probability quartiles for a single session or pooled across sessions.
 
@@ -3475,7 +3699,7 @@ def analyze_switch_probability_quartiles(subject_id, session_date=None, win_loss
 
         # Process each session separately
         for session_date in sessions:
-            session_result = process_session(subject_id, session_date)
+            session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
             if not session_result:
                 continue
 
@@ -3575,7 +3799,7 @@ def analyze_switch_probability_quartiles(subject_id, session_date=None, win_loss
 
     else:
         # Single session analysis
-        session_result = process_session(subject_id, session_date)
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
         if not session_result:
             print(f"Could not process session {subject_id}/{session_date}")
             return None
@@ -3662,7 +3886,7 @@ def analyze_switch_probability_quartiles(subject_id, session_date=None, win_loss
         switch_probs = np.array(trial_switch_probs)
         reward_outcomes = session_result["reward_outcomes"][non_m_indices]
         time_axis = session_result['time_axis']
-        plot_title = f'Photometry by Switch Probability Quartiles: {subject_id} - {session_date}'
+        plot_title = f'LC Signal by Switch Probability Quartiles: {subject_id} - {session_date}'
 
     # Create quartile bins based on switch probabilities
     quartile_bins = pd.qcut(switch_probs, q=4, labels=False)
@@ -3748,315 +3972,814 @@ def analyze_switch_probability_quartiles(subject_id, session_date=None, win_loss
     }
 
 
-def analyze_normalized_quartile_effects(subject_id):
+def analyze_signal_state_effects_on_switching(subject_id, signal_window='pre_cue', condition='loss', behavior_df=None):
     """
-    Analyze whether the quartile effect on switch probability is stronger than expected
-    given the baseline differences in win-stay/lose-switch behavior.
+    Perform multivariate logistic regression analysis to determine if photometry signal
+    predicts choice switching independent of behavioral state.
+
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    signal_window : str, optional (default='pre_cue')
+        Time window to use for calculating average photometry signal:
+        - 'pre_cue': -0.75s to -0.25s before lick
+        - 'early_post': +1s to +2s after lick
+        - 'late_post': +3.5s to +4.5s after lick
+    condition : str, optional (default='loss')
+        Which trial outcome to analyze: 'loss' or 'win'
+
+    Returns:
+    --------
+    dict: Results of the logistic regression analysis including model coefficients and statistics
     """
-    print(f"Analyzing normalized quartile effects for {subject_id}...")
-
-    # First, get baseline win/loss switch probabilities
-    switch_probs = analyze_switch_probabilities(subject_id)
-
-    if not switch_probs or 'after_win' not in switch_probs or 'after_loss' not in switch_probs:
-        print("Could not obtain baseline switch probabilities")
-        return None
-
-    baseline_win_switch = switch_probs['after_win']['rate']
-    baseline_loss_switch = switch_probs['after_loss']['rate']
-
-    print(f"\nBaseline switch probabilities:")
-    print(f"After win: {baseline_win_switch:.2f}%")
-    print(f"After loss: {baseline_loss_switch:.2f}%")
-
-    # Analyze pre-cue quartiles for win and loss trials
-    loss_results = analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue',
-                                                       condition='loss', plot_verification=False)
-    win_results = analyze_signal_quartiles_by_outcome(subject_id, signal_window='pre_cue',
-                                                      condition='win', plot_verification=False)
-
-    if not loss_results or not win_results:
-        print("Could not obtain quartile analysis results")
-        return None
-
-    # Debugging: Print keys to help identify the correct one
-    print("Available keys in loss_results:", list(loss_results.keys()))
-    print("Available keys in win_results:", list(win_results.keys()))
-
-    # Create normalized effects (how much each quartile deviates from baseline)
-    loss_normalized = []
-    win_normalized = []
-
-    for i in range(4):
-        # For loss trials: (quartile_switch_rate - baseline_loss_switch) / baseline_loss_switch
-        if baseline_loss_switch > 0:
-            loss_normalized.append((loss_results['quartile_switch_rates'][i] - baseline_loss_switch) /
-                                   baseline_loss_switch * 100)
-        else:
-            loss_normalized.append(0)
-
-        # For win trials: (quartile_switch_rate - baseline_win_switch) / baseline_win_switch
-        if baseline_win_switch > 0:
-            win_normalized.append((win_results['quartile_switch_rates'][i] - baseline_win_switch) /
-                                  baseline_win_switch * 100)
-        else:
-            win_normalized.append(0)
-
-    # Calculate the slope of the effect across quartiles
-    loss_slope = (loss_normalized[3] - loss_normalized[0]) / 3
-    win_slope = (win_normalized[3] - win_normalized[0]) / 3
-
-    # Create visualization
-    plt.figure(figsize=(12, 8))
-
-    # Plot 1: Actual switch rates by quartile
-    plt.subplot(2, 1, 1)
-    plt.plot(range(1, 5), loss_results['quartile_switch_rates'], 'o-', color='red',
-             label=f'Loss trials (baseline: {baseline_loss_switch:.1f}%)')
-    plt.plot(range(1, 5), win_results['quartile_switch_rates'], 'o-', color='green',
-             label=f'Win trials (baseline: {baseline_win_switch:.1f}%)')
-
-    # Add counts to points
-    for i, (loss_rate, loss_count, win_rate, win_count) in enumerate(zip(
-            loss_results['quartile_switch_rates'], loss_results['quartile_trial_counts'],
-            win_results['quartile_switch_rates'], win_results['quartile_trial_counts'])):
-        plt.text(i + 1, loss_rate + 2, f"n={loss_count}", color='red', ha='center', fontsize=8)
-        plt.text(i + 1, win_rate - 4, f"n={win_count}", color='green', ha='center', fontsize=8)
-
-    plt.xlabel('Signal Quartile')
-    plt.ylabel('Switch Rate (%)')
-    plt.title('Actual Switch Rates by Pre-Cue Signal Quartile')
-    plt.xticks(range(1, 5))
-    plt.ylim(0, max(max(loss_results['quartile_switch_rates']),
-                    max(win_results['quartile_switch_rates'])) + 10)
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-
-    # Plot 2: Normalized effects (percentage change from baseline)
-    plt.subplot(2, 1, 2)
-    plt.plot(range(1, 5), loss_normalized, 'o-', color='red',
-             label=f'Loss trials (slope: {loss_slope:.2f}%/quartile)')
-    plt.plot(range(1, 5), win_normalized, 'o-', color='green',
-             label=f'Win trials (slope: {win_slope:.2f}%/quartile)')
-    plt.axhline(y=0, color='gray', linestyle='-', alpha=0.5)
-
-    plt.xlabel('Signal Quartile')
-    plt.ylabel('Normalized Effect (%)')
-    plt.title('Normalized Effect: Change from Baseline Switch Probability')
-    plt.xticks(range(1, 5))
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-
-    plt.tight_layout()
-    save_figure(plt.gcf(), subject_id, "pooled", "normalized_quartile_effects")
-    plt.show()
-
-    # Statistical analysis: bootstrap comparison of slopes
-    print("\nBootstrap analysis of slope differences:")
-    n_bootstrap = 1000
-    slope_diffs = []
-
-    # Check if trial-level data is available in all_trials_data
-    if 'all_trials_data' in loss_results and 'all_trials_data' in win_results:
-        print("Using trial-level data from all_trials_data")
-
-        # Extract trial-level data - structure depends on what's in all_trials_data
-        # Let's inspect what's in all_trials_data
-        if loss_results['all_trials_data'] is not None and len(loss_results['all_trials_data']) > 0:
-            print("all_trials_data keys for a sample trial:",
-                  list(loss_results['all_trials_data'][0].keys()) if isinstance(loss_results['all_trials_data'][0],
-                                                                                dict) else "Not a dictionary")
-
-        # Assuming all_trials_data contains trial dictionaries with 'signal' and 'switch' keys
-        # You might need to adjust these keys based on actual data structure
+    if behavior_df is None:
         try:
-            # Extract signals and switches from all_trials_data
-            loss_signals = np.array([trial.get('signal', 0) for trial in loss_results['all_trials_data']])
-            loss_switches = np.array([trial.get('switch', 0) for trial in loss_results['all_trials_data']])
+            behavior_df = load_filtered_behavior_data("MatchingPennies")
+            if behavior_df is None:
+                print("Error loading behavior data")
+                return None
+        except Exception as e:
+            print(f"Error loading behavior data: {e}")
+            return None
+        
+    subject_df = behavior_df[behavior_df['subjid'] == subject_id]
+    if subject_df.empty:
+        print(f"No behavioral data found for subject {subject_id}")
+        return None
 
-            win_signals = np.array([trial.get('signal', 0) for trial in win_results['all_trials_data']])
-            win_switches = np.array([trial.get('switch', 0) for trial in win_results['all_trials_data']])
+    import statsmodels.api as sm
+    import pandas as pd
+    import numpy as np
+    from statsmodels.tools.sm_exceptions import PerfectSeparationError
 
-            print(f"Extracted {len(loss_signals)} loss trials and {len(win_signals)} win trials")
+    # Define time windows
+    time_windows = {
+        'pre_cue': (-0.75, -0.25),
+        'early_post': (1.0, 2.0),
+        'late_post': (3.5, 4.5)
+    }
 
-            # Alternative method: recreate the data by using quartiles and sampling switch rates
-            # This is a fallback method if we can't directly extract trial data
-        except (AttributeError, KeyError, TypeError) as e:
-            print(f"Error extracting trial data: {e}")
-            print("Falling back to simulated bootstrap based on quartile rates")
+    if signal_window not in time_windows:
+        raise ValueError(f"Invalid signal_window. Choose from: {list(time_windows.keys())}")
 
-            # Method 2: Simulate trial data from quartile statistics
-            loss_signals = []
-            loss_switches = []
-            win_signals = []
-            win_switches = []
+    # Get time window bounds
+    window_start, window_end = time_windows[signal_window]
+    is_pre_cue_analysis = signal_window == 'pre_cue'
 
-            # For each quartile
-            for q in range(4):
-                # Get number of trials
-                loss_n = loss_results['quartile_trial_counts'][q]
-                win_n = win_results['quartile_trial_counts'][q]
+    # Set target reward based on condition
+    target_reward = 1 if condition == 'win' else 0
 
-                # Get switch rate (as proportion, not percentage)
-                loss_switch_rate = loss_results['quartile_switch_rates'][q] / 100
-                win_switch_rate = win_results['quartile_switch_rates'][q] / 100
+    print(f"Analyzing signal and state effects on switching for {subject_id}...")
+    print(f"Condition: {condition} trials, Signal window: {signal_window} ({window_start}s to {window_end}s)")
 
-                # Create simulated trials
-                # Signals within quartile (just use quartile number as signal value)
-                loss_signals.extend([q] * loss_n)
-                win_signals.extend([q] * win_n)
+    # Find all session directories for this subject
+    subject_dir = os.path.join(base_dir, subject_id)
+    if not os.path.exists(subject_dir):
+        print(f"Subject directory not found: {subject_dir}")
+        return None
 
-                # Switch decisions (1 for switch, 0 for stay)
-                loss_switches.extend(np.random.binomial(1, loss_switch_rate, size=loss_n))
-                win_switches.extend(np.random.binomial(1, win_switch_rate, size=win_n))
+    # Data containers
+    trial_data = []  # Will store everything we need for regression
+    time_axis = None
 
-            loss_signals = np.array(loss_signals)
-            loss_switches = np.array(loss_switches)
-            win_signals = np.array(win_signals)
-            win_switches = np.array(win_switches)
+    sessions = sorted(subject_df['date'].unique())
 
-            print(f"Created simulated data: {len(loss_signals)} loss trials and {len(win_signals)} win trials")
-
+    state_data_available = 'p_stochastic' in subject_df.columns
+    if state_data_available:
+        print("State probability data available in behavioral dataframe")
     else:
-        print("No trial-level data available, simulating bootstrap from quartile statistics")
-        # Same simulation code as in the except block above
-        loss_signals = []
-        loss_switches = []
-        win_signals = []
-        win_switches = []
+        print("No state probability data found in behavioral dataframe")
 
-        # For each quartile
-        for q in range(4):
-            # Get number of trials
-            loss_n = loss_results['quartile_trial_counts'][q]
-            win_n = win_results['quartile_trial_counts'][q]
+    for session_date in sessions:
+        print(f"Processing {subject_id}/{session_date}...")
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
+        if not session_result:
+            continue
 
-            # Get switch rate (as proportion, not percentage)
-            loss_switch_rate = loss_results['quartile_switch_rates'][q] / 100
-            win_switch_rate = win_results['quartile_switch_rates'][q] / 100
+        # Store time axis from first valid session
+        if time_axis is None:
+            time_axis = session_result['time_axis']
 
-            # Create simulated trials
-            # Signals within quartile (just use quartile index + random variation as signal)
-            quartile_signal = q + 0.5  # Center of quartile
-            loss_signals.extend([quartile_signal] * loss_n)
-            win_signals.extend([quartile_signal] * win_n)
+        # Get behavioral data
+        behavior_data = session_result['behavioral_data']
+        rewards = np.array(behavior_data['reward'])
+        choices = np.array(behavior_data['choice'])
 
-            # Switch decisions (1 for switch, 0 for stay)
-            loss_switches.extend(np.random.binomial(1, loss_switch_rate, size=loss_n))
-            win_switches.extend(np.random.binomial(1, win_switch_rate, size=win_n))
+        # Skip sessions with too few trials
+        if len(choices) < 5:
+            print(f"Skipping {subject_id}/{session_date}, insufficient trials")
+            continue
 
-        loss_signals = np.array(loss_signals)
-        loss_switches = np.array(loss_switches)
-        win_signals = np.array(win_signals)
-        win_switches = np.array(win_switches)
+        # Get valid trials with photometry data
+        valid_trials = session_result['valid_trials']
+        epoched_data = session_result['epoched_data'][valid_trials]
 
-        print(f"Created simulated data: {len(loss_signals)} loss trials and {len(win_signals)} win trials")
+        # Find time indices for the specified window
+        window_idx_start = np.where(time_axis >= window_start)[0][0]
+        window_idx_end = np.where(time_axis <= window_end)[0][-1]
 
-    # Setup for bootstrap
-    loss_trials = {
-        'signals': loss_signals,
-        'switches': loss_switches
-    }
-
-    win_trials = {
-        'signals': win_signals,
-        'switches': win_switches
-    }
-
-    # Bootstrap resampling
-    for _ in range(n_bootstrap):
-        # Resample loss trials
-        loss_idx = np.random.choice(len(loss_trials['signals']), len(loss_trials['signals']), replace=True)
-        loss_resampled_signals = loss_trials['signals'][loss_idx]
-        loss_resampled_switches = loss_trials['switches'][loss_idx]
-
-        # Resample win trials
-        win_idx = np.random.choice(len(win_trials['signals']), len(win_trials['signals']), replace=True)
-        win_resampled_signals = win_trials['signals'][win_idx]
-        win_resampled_switches = win_trials['switches'][win_idx]
-
-        # Calculate quartiles for resampled data
-        loss_quartiles = pd.qcut(loss_resampled_signals, 4, labels=False)
-        win_quartiles = pd.qcut(win_resampled_signals, 4, labels=False)
-
-        # Calculate switch rates per quartile
-        loss_rates = []
-        win_rates = []
-
-        for q in range(4):
-            loss_q_mask = loss_quartiles == q
-            win_q_mask = win_quartiles == q
-
-            if np.sum(loss_q_mask) > 0:
-                loss_q_rate = np.mean(loss_resampled_switches[loss_q_mask]) * 100
-                loss_rates.append(loss_q_rate)
-            else:
-                loss_rates.append(0)
-
-            if np.sum(win_q_mask) > 0:
-                win_q_rate = np.mean(win_resampled_switches[win_q_mask]) * 100
-                win_rates.append(win_q_rate)
-            else:
-                win_rates.append(0)
-
-        # Normalize by baseline
-        if baseline_loss_switch > 0 and baseline_win_switch > 0:
-            loss_norm = [(r - baseline_loss_switch) / baseline_loss_switch * 100 for r in loss_rates]
-            win_norm = [(r - baseline_win_switch) / baseline_win_switch * 100 for r in win_rates]
-
-            # Calculate slopes
-            loss_bs_slope = (loss_norm[3] - loss_norm[0]) / 3
-            win_bs_slope = (win_norm[3] - win_norm[0]) / 3
-
-            # Store difference in slopes
-            slope_diffs.append(loss_bs_slope - win_bs_slope)
-
-    # Calculate confidence interval and p-value
-    slope_diffs = np.array(slope_diffs)
-    mean_diff = np.mean(slope_diffs)
-    ci_low = np.percentile(slope_diffs, 2.5)
-    ci_high = np.percentile(slope_diffs, 97.5)
-
-    # P-value from bootstrap distribution
-    p_value = np.mean(slope_diffs <= 0) if mean_diff > 0 else np.mean(slope_diffs >= 0)
-    p_value = min(p_value, 1 - p_value) * 2  # Two-tailed
-
-    print("\nStatistical comparison of slopes:")
-    slope_diff = loss_slope - win_slope
-
-    print(f"Loss trials slope: {loss_slope:.2f}%/quartile")
-    print(f"Win trials slope: {win_slope:.2f}%/quartile")
-    print(f"Difference in slopes: {loss_slope - win_slope:.2f}%/quartile")
-
-    # Print bootstrap results
-    print("\nBootstrap analysis results:")
-    print(f"Mean difference from bootstrap: {mean_diff:.2f}%/quartile")
-    print(f"95% CI: [{ci_low:.2f}, {ci_high:.2f}]")
-    print(f"Bootstrap p-value: {p_value:.4f}")
-
-    # Statistical interpretation
-    if p_value < 0.05:
-        if mean_diff > 0:
-            print(
-                "Conclusion: The effect of pre-cue signal on switching is significantly stronger for loss trials (p < 0.05)")
+        # Get state probabilities for this session from the filtered dataframe
+        session_df = subject_df[subject_df['date'] == session_date]
+        if session_df.empty:
+            print(f"No behavioral data found in filtered dataframe for {subject_id}/{session_date}")
+            continue
         else:
-            print(
-                "Conclusion: The effect of pre-cue signal on switching is significantly stronger for win trials (p < 0.05)")
-    else:
-        print("Conclusion: No significant difference in the normalized effect strength between win and loss trials")
+            print(f"Found {len(session_df)} trials in the filtered dataframe for {subject_id}/{session_date}")
 
-    # Return results with bootstrap stats
-    return {
+        # Only include non-missed trials in analysis
+        non_miss_mask = choices != 'M'
+        non_miss_trials = np.where(non_miss_mask)[0]
+
+        # Process each valid trial based on condition
+        for i, trial_idx in enumerate(valid_trials):
+            # Skip if this isn't a valid trial index
+            if trial_idx >= len(choices):
+                continue
+
+            # Skip missed trials
+            if choices[trial_idx] == 'M':
+                continue
+
+            # Check if current trial matches our condition (win/loss)
+            if is_pre_cue_analysis:
+                # For pre-cue, we need this to be after our target condition
+                if trial_idx == 0 or rewards[trial_idx - 1] != target_reward:
+                    continue
+
+                # Need both current and previous trials to be non-missed
+                if trial_idx - 1 not in non_miss_trials:
+                    continue
+
+                prev_trial_idx = trial_idx - 1
+                curr_trial_idx = trial_idx
+
+                # Calculate if choice switched from previous trial
+                choice_switched = int(choices[prev_trial_idx] != choices[curr_trial_idx])
+
+                # Get average photometry signal in the window
+                signal_value = np.mean(epoched_data[i][window_idx_start:window_idx_end])
+
+            else:  # Post-cue analysis
+                # For post-cue, current trial must match our condition
+                if rewards[trial_idx] != target_reward:
+                    continue
+
+                # Need a next trial that's non-missed
+                if trial_idx >= len(choices) - 1 or choices[trial_idx + 1] == 'M':
+                    continue
+
+                curr_trial_idx = trial_idx
+                next_trial_idx = trial_idx + 1
+
+                # Calculate if next choice switched from current
+                choice_switched = int(choices[curr_trial_idx] != choices[next_trial_idx])
+
+                # Get average photometry signal in the window
+                signal_value = np.mean(epoched_data[i][window_idx_start:window_idx_end])
+
+            # Get state probabilities (if available)
+            state_info = {
+                'p_stochastic': 0,
+                'p_leftbias': 0,
+                'p_rightbias': 0
+            }
+
+            if len(session_df) > curr_trial_idx:
+                # Extract probabilities from the filtered dataframe
+                try:
+                    state_info['p_stochastic'] = float(session_df.iloc[curr_trial_idx].get('p_stochastic', 0) or 0)
+                    state_info['p_leftbias'] = float(session_df.iloc[curr_trial_idx].get('p_leftbias', 0) or 0)
+                    state_info['p_rightbias'] = float(session_df.iloc[curr_trial_idx].get('p_rightbias', 0) or 0)
+                except (IndexError, ValueError, TypeError) as e:
+                    print(f"Error extracting state probabilities for trial {curr_trial_idx}: {e}")
+
+            # Create trial data record with all necessary information
+            trial_data.append({
+                'session': session_date,
+                'trial_idx': curr_trial_idx,
+                'signal': signal_value,
+                'switch': choice_switched,
+                'p_stochastic': state_info['p_stochastic'],
+                'p_leftbias': state_info['p_leftbias'],
+                'p_rightbias': state_info['p_rightbias'],
+                'p_biased': max(state_info['p_leftbias'], state_info['p_rightbias'])
+            })
+
+    # Check if we have enough data
+    if len(trial_data) < 10:
+        print(f"Insufficient data for analysis: only {len(trial_data)} valid trials")
+        return None
+
+    # Create DataFrame and prepare for regression
+    data = pd.DataFrame(trial_data)
+
+    # Print basic data summary
+    print(f"\nAnalysis summary for {subject_id}:")
+    print(f"  Total trials analyzed: {len(data)}")
+    print(f"  Overall switch rate: {data['switch'].mean() * 100:.1f}%")
+
+    # Check for constant values or zero variance and print state probability distribution
+    print("\nState probability distributions:")
+    state_use_for_model = {}
+
+    for state in ['p_stochastic', 'p_biased']:
+        mean_val = data[state].mean()
+        median_val = data[state].median()
+        min_val = data[state].min()
+        max_val = data[state].max()
+        std_val = data[state].std()
+        print(f"  {state}: Mean={mean_val:.3f}, Median={median_val:.3f}, Range=[{min_val:.3f}, {max_val:.3f}], Std={std_val:.3f}")
+        
+        # Determine if this state has enough variation to use in model
+        if min_val == max_val or std_val < 0.001:  # Effectively constant
+            state_use_for_model[state] = False
+            print(f"  Warning: {state} has no variation. Excluding from model.")
+        else:
+            state_use_for_model[state] = True
+
+    # Add z-scored variables with proper handling of zero variance and NaN checking
+    data['signal_z'] = (data['signal'] - data['signal'].mean()) / (data['signal'].std() or 1)
+
+    # Clean and standardize state variables properly
+    for state in ['p_stochastic', 'p_biased']:
+        if state_use_for_model[state]:
+            # Replace any NaN values first
+            data[state] = data[state].fillna(data[state].mean())
+            
+            # Calculate z-score with safeguards
+            mean_val = data[state].mean()
+            std_val = data[state].std()
+            
+            # Only standardize if we have meaningful variation
+            if std_val > 0.001:
+                data[f'{state}_z'] = (data[state] - mean_val) / std_val
+                
+                # Check for inf/NaN and replace with zeros if found
+                data[f'{state}_z'] = data[f'{state}_z'].replace([np.inf, -np.inf], 0).fillna(0)
+            else:
+                # If std is too small, just set all values to 0
+                data[f'{state}_z'] = 0
+        else:
+            # No variation - set all values to 0
+            data[f'{state}_z'] = 0
+
+    # Create a function to fit model safely
+    def fit_model_safely(model_formula, data):
+        try:
+            return model_formula.fit(disp=0)  # Turn off convergence messages
+        except PerfectSeparationError:
+            print("Warning: Perfect separation detected. Some coefficients will be inaccurate.")
+            # Use a more robust method
+            return model_formula.fit(method='bfgs', disp=0)
+        except np.linalg.LinAlgError:
+            print("Warning: Singular matrix detected. Using regularized fit.")
+            # Add tiny regularization
+            return model_formula.fit_regularized(alpha=0.01, disp=0)
+        except Exception as e:
+            print(f"Error fitting model: {e}")
+            return None
+
+    # Run a series of logistic regression models
+
+    # Model 1: Signal only - this should always work
+    model1_formula = sm.Logit(data['switch'], sm.add_constant(data['signal_z']))
+    model1 = fit_model_safely(model1_formula, data)
+
+    # Model 2: State probabilities only (using only variables with variation)
+    if state_use_for_model['p_stochastic'] or state_use_for_model['p_biased']:
+        # Select variables with variation
+        state_vars = []
+        if state_use_for_model['p_stochastic']:
+            state_vars.append('p_stochastic_z')
+        if state_use_for_model['p_biased']:
+            state_vars.append('p_biased_z')
+
+        if state_vars:
+            model2_formula = sm.Logit(data['switch'], sm.add_constant(data[state_vars]))
+            model2 = fit_model_safely(model2_formula, data)
+        else:
+            print("No state variables have sufficient variation. Skipping state-only model.")
+            model2 = None
+    else:
+        print("No state variables have sufficient variation. Skipping state-only model.")
+        model2 = None
+
+    # Model 3: Signal + State probabilities
+    if state_use_for_model['p_stochastic'] or state_use_for_model['p_biased']:
+        # Create combined list of variables
+        model3_vars = ['signal_z']
+        if state_use_for_model['p_stochastic']:
+            model3_vars.append('p_stochastic_z')
+        if state_use_for_model['p_biased']:
+            model3_vars.append('p_biased_z')
+
+        model3_formula = sm.Logit(data['switch'], sm.add_constant(data[model3_vars]))
+        model3 = fit_model_safely(model3_formula, data)
+    else:
+        print("No state variables have sufficient variation. Model 3 will be identical to Model 1.")
+        model3 = model1  # Just use signal-only model
+
+    # Model 4: Signal + State + Interaction (only if we have state vars)
+    if state_use_for_model['p_stochastic'] or state_use_for_model['p_biased']:
+        # Create interaction terms for variables with variation
+        model4_vars = ['signal_z']
+        interaction_terms = []
+
+        if state_use_for_model['p_stochastic']:
+            model4_vars.append('p_stochastic_z')
+            data['signal_x_stoch'] = data['signal_z'] * data['p_stochastic_z']
+            interaction_terms.append('signal_x_stoch')
+
+        if state_use_for_model['p_biased']:
+            model4_vars.append('p_biased_z')
+            data['signal_x_biased'] = data['signal_z'] * data['p_biased_z']
+            interaction_terms.append('signal_x_biased')
+
+        # Add interaction terms to model variables
+        model4_vars.extend(interaction_terms)
+
+        model4_formula = sm.Logit(data['switch'], sm.add_constant(data[model4_vars]))
+        model4 = fit_model_safely(model4_formula, data)
+    else:
+        print("No state variables have sufficient variation. Skipping full interaction model.")
+        model4 = None
+
+    # Compute odds ratios for all models
+    def get_odds_ratios(model):
+        if model is None:
+            return None
+        return np.exp(model.params)
+
+    odds_ratios1 = get_odds_ratios(model1)
+    odds_ratios2 = get_odds_ratios(model2)
+    odds_ratios3 = get_odds_ratios(model3)
+    odds_ratios4 = get_odds_ratios(model4)
+
+    # Print model results
+    print("\n=== Model 1: Signal Only ===")
+    if model1 is not None:
+        print(model1.summary())
+        print("\nOdds Ratios (Signal Only):")
+        for param, odds in zip(model1.params.index, odds_ratios1):
+            print(f"  {param}: {odds:.3f}")
+    else:
+        print("Model could not be fitted.")
+
+    if model2 is not None:
+        print("\n=== Model 2: State Probabilities Only ===")
+        print(model2.summary())
+        print("\nOdds Ratios (State Probabilities Only):")
+        for param, odds in zip(model2.params.index, odds_ratios2):
+            print(f"  {param}: {odds:.3f}")
+    else:
+        print("\n=== Model 2: State Probabilities Only ===")
+        print("Model could not be fitted due to insufficient variation in state variables.")
+
+    if model3 is not None and model3 is not model1:
+        print("\n=== Model 3: Signal + State Probabilities ===")
+        print(model3.summary())
+        print("\nOdds Ratios (Signal + State Probabilities):")
+        for param, odds in zip(model3.params.index, odds_ratios3):
+            print(f"  {param}: {odds:.3f}")
+    else:
+        print("\n=== Model 3: Signal + State Probabilities ===")
+        if model3 is model1:
+            print("Model identical to Model 1 (Signal Only) due to insufficient variation in state variables.")
+        else:
+            print("Model could not be fitted.")
+
+    if model4 is not None:
+        print("\n=== Model 4: Signal + State + Interaction ===")
+        print(model4.summary())
+        print("\nOdds Ratios (Signal + State + Interaction):")
+        for param, odds in zip(model4.params.index, odds_ratios4):
+            print(f"  {param}: {odds:.3f}")
+    else:
+        print("\n=== Model 4: Signal + State + Interaction ===")
+        print("Model could not be fitted due to insufficient variation in state variables.")
+
+    # Perform model comparison
+    from scipy import stats
+
+    def compare_models(larger_model, smaller_model, label1, label2):
+        """Compare nested models using likelihood ratio test"""
+        if larger_model is None or smaller_model is None:
+            print(f"Cannot compare {label1} vs {label2} - one or both models missing.")
+            return None
+
+        # Skip if models are identical
+        if larger_model is smaller_model:
+            print(f"Cannot compare {label1} vs {label2} - models are identical.")
+            return None
+
+        try:
+            lr_stat = -2 * (smaller_model.llf - larger_model.llf)
+            df_diff = larger_model.df_model - smaller_model.df_model
+
+            if df_diff <= 0:
+                print(f"Cannot compare {label1} vs {label2} - models not properly nested.")
+                return None
+
+            p_value = stats.chi2.sf(lr_stat, df_diff)
+
+            print(f"\nLikelihood Ratio Test: {label1} vs {label2}")
+            print(f"  Chi-squared: {lr_stat:.3f}")
+            print(f"  Degrees of freedom: {df_diff}")
+            print(f"  p-value: {p_value:.6f}")
+
+            if p_value < 0.05:
+                print(f"  Result: {label1} is significantly better than {label2}")
+            else:
+                print(f"  Result: No significant improvement of {label1} over {label2}")
+
+            return {"lr_stat": lr_stat, "df_diff": df_diff, "p_value": p_value}
+        except Exception as e:
+            print(f"Error comparing models: {e}")
+            return None
+
+    # Compare models only if appropriate
+    comp1 = None
+    comp2 = None
+    comp3 = None
+
+    # Model 3 vs Model 1 (signal + state vs signal only)
+    if model3 is not None and model3 is not model1 and model1 is not None:
+        comp1 = compare_models(model3, model1, "Signal+State", "Signal Only")
+
+    # Model 3 vs Model 2 (signal + state vs state only)
+    if model3 is not None and model2 is not None and model3 is not model2:
+        comp2 = compare_models(model3, model2, "Signal+State", "State Only")
+
+    # Model 4 vs Model 3 (full interaction vs signal + state)
+    if model4 is not None and model3 is not None and model4 is not model3:
+        comp3 = compare_models(model4, model3, "Signal+State+Interaction", "Signal+State")
+
+    # Calculate McFadden's pseudo-R² for each model
+    def mcfadden_r2(model):
+        """Calculate McFadden's pseudo-R² for a fitted model"""
+        if model is None:
+            return None
+        return 1 - (model.llf / model.llnull)
+
+    r2_model1 = mcfadden_r2(model1)
+    r2_model2 = mcfadden_r2(model2)
+    r2_model3 = mcfadden_r2(model3)
+    r2_model4 = mcfadden_r2(model4)
+
+    print("\nMcFadden's Pseudo-R²:")
+    print(f"  Model 1 (Signal Only): {r2_model1:.4f}" if r2_model1 is not None else "  Model 1: Not available")
+    print(f"  Model 2 (State Only): {r2_model2:.4f}" if r2_model2 is not None else "  Model 2: Not available")
+    print(f"  Model 3 (Signal + State): {r2_model3:.4f}" if r2_model3 is not None else "  Model 3: Not available")
+    print(
+        f"  Model 4 (Signal + State + Interaction): {r2_model4:.4f}" if r2_model4 is not None else "  Model 4: Not available")
+
+    # Determine best model based on AIC
+    # Get AIC for each model (if available)
+    aic_values = []
+    model_names = []
+    models = [model1, model2, model3, model4]
+    model_labels = ["Signal Only", "State Only", "Signal + State", "Signal + State + Interaction"]
+
+    for model, label in zip(models, model_labels):
+        if model is not None:
+            # Skip duplicate models (e.g., if model3 is model1)
+            if model not in [m for m, _ in zip(models[:models.index(model)], model_labels[:models.index(model)]) if
+                             m is not None]:
+                aic_values.append(model.aic)
+                model_names.append(label)
+
+    if aic_values:
+        best_model_idx = np.argmin(aic_values)
+        print(f"\nBest model based on AIC: {model_names[best_model_idx]}")
+        print(f"  AIC values: {[f'{aic:.2f}' for aic in aic_values]}")
+    else:
+        print("\nNo models available for AIC comparison")
+        best_model_idx = None
+
+    # Visualize the results only if we have models to visualize
+    if model1 is not None:
+        plt.figure(figsize=(15, 10))
+
+        # First subplot: Effect of signal on switch probability
+        plt.subplot(2, 2, 1)
+
+        # Range of signal values for prediction (use standardized values)
+        signal_range = np.linspace(-2.5, 2.5, 100)  # z-scores from -2.5 to 2.5
+
+        # Create prediction data frames for different models
+        pred_data_model1 = pd.DataFrame({'signal_z': signal_range})
+        pred_data_model1 = sm.add_constant(pred_data_model1)
+
+        # Make predictions for model 1
+        pred_model1 = model1.predict(pred_data_model1)
+
+        # Plot predictions for signal-only model
+        plt.plot(signal_range, pred_model1, 'b-', linewidth=2.5, label="Signal Only Model")
+
+        # Create prediction data for model 3 (Signal + State) if it exists and has state variables
+        if model3 is not None and model3 is not model1:
+            # Only show prediction lines if there's actual variation in state variables
+            has_state_vars = False
+
+            # Create predictions for different levels of state probabilities
+            # Use mean, low (-1SD), and high (+1SD) values for the state probabilities
+            scenarios = []
+
+            if state_use_for_model['p_stochastic'] and state_use_for_model['p_biased']:
+                # Both states have variation
+                has_state_vars = True
+                stoch_mean = data['p_stochastic_z'].mean()
+                stoch_sd = data['p_stochastic_z'].std()
+                biased_mean = data['p_biased_z'].mean()
+                biased_sd = data['p_biased_z'].std()
+
+                # Define typical scenarios
+                scenarios = [
+                    {'name': 'High Stochastic, Low Biased', 'stoch': stoch_mean + stoch_sd,
+                     'biased': biased_mean - biased_sd, 'color': 'green'},
+                    {'name': 'Low Stochastic, High Biased', 'stoch': stoch_mean - stoch_sd,
+                     'biased': biased_mean + biased_sd, 'color': 'red'},
+                    {'name': 'Average State Probs', 'stoch': stoch_mean, 'biased': biased_mean, 'color': 'purple'}
+                ]
+            elif state_use_for_model['p_stochastic']:
+                # Only stochastic has variation
+                has_state_vars = True
+                stoch_mean = data['p_stochastic_z'].mean()
+                stoch_sd = data['p_stochastic_z'].std()
+
+                scenarios = [
+                    {'name': 'High Stochastic', 'stoch': stoch_mean + stoch_sd,
+                     'biased': 0, 'color': 'green'},
+                    {'name': 'Low Stochastic', 'stoch': stoch_mean - stoch_sd,
+                     'biased': 0, 'color': 'red'},
+                    {'name': 'Average Stochastic', 'stoch': stoch_mean,
+                     'biased': 0, 'color': 'purple'}
+                ]
+            elif state_use_for_model['p_biased']:
+                # Only biased has variation
+                has_state_vars = True
+                biased_mean = data['p_biased_z'].mean()
+                biased_sd = data['p_biased_z'].std()
+
+                scenarios = [
+                    {'name': 'High Biased', 'stoch': 0,
+                     'biased': biased_mean + biased_sd, 'color': 'green'},
+                    {'name': 'Low Biased', 'stoch': 0,
+                     'biased': biased_mean - biased_sd, 'color': 'red'},
+                    {'name': 'Average Biased', 'stoch': 0,
+                     'biased': biased_mean, 'color': 'purple'}
+                ]
+
+            # Plot prediction lines if we have state variables with variation
+            if has_state_vars:
+                for scenario in scenarios:
+                    # Create prediction data with the right variables
+                    pred_data = {'signal_z': signal_range}
+
+                    if state_use_for_model['p_stochastic']:
+                        pred_data['p_stochastic_z'] = scenario['stoch']
+
+                    if state_use_for_model['p_biased']:
+                        pred_data['p_biased_z'] = scenario['biased']
+
+                    # Convert to DataFrame and add constant
+                    pred_data = pd.DataFrame(pred_data)
+                    pred_data = sm.add_constant(pred_data)
+
+                    # Make predictions using model 3
+                    try:
+                        pred_probs = model3.predict(pred_data)
+
+                        # Plot prediction line
+                        plt.plot(signal_range, pred_probs, color=scenario['color'], linewidth=2.5,
+                                 label=scenario['name'])
+                    except Exception as e:
+                        print(f"Error generating predictions for {scenario['name']}: {e}")
+
+        # Add reference line at 50% probability
+        plt.axhline(y=0.5, color='black', linestyle='--', alpha=0.5)
+
+        # Add labels and title
+        plt.xlabel('Signal (z-scored)', fontsize=12)
+        plt.ylabel('Probability of Switching', fontsize=12)
+        plt.title(f'Predicted Switch Probability by {signal_window} Signal and State', fontsize=14)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.ylim(0, 1)
+
+        # Second subplot: Actual switching rates by signal quartile
+        plt.subplot(2, 2, 2)
+
+        # Create quartiles of signal
+        try:
+            data['signal_quartile'] = pd.qcut(data['signal'], 4, labels=['Q1', 'Q2', 'Q3', 'Q4'])
+
+            # Only create stochastic quartiles if there's variation
+            if state_use_for_model['p_stochastic'] and data['p_stochastic'].std() > 0:
+                try:
+                    data['stoch_quartile'] = pd.qcut(data['p_stochastic'],
+                                                     q=4,
+                                                     labels=['Low', 'Medium-Low', 'Medium-High', 'High'],
+                                                     duplicates='drop')
+                except Exception as e:
+                    print(f"Could not create stochastic quartiles: {e}")
+                    data['stoch_quartile'] = "All data"
+            else:
+                data['stoch_quartile'] = "All data"
+
+            # Calculate switch rates for each combination of signal quartile and stochastic quartile
+            switch_rates = data.groupby(['signal_quartile', 'stoch_quartile']).agg(
+                switch_rate=('switch', 'mean'),
+                count=('switch', 'count')
+            ).reset_index()
+
+            # Convert to percentages
+            switch_rates['switch_rate'] = switch_rates['switch_rate'] * 100
+
+            # Plot separate lines for each stochastic probability quartile
+            stoch_levels = sorted(data['stoch_quartile'].unique())
+            stoch_colors = plt.cm.viridis(np.linspace(0, 1, len(stoch_levels)))
+
+            for i, stoch_q in enumerate(stoch_levels):
+                stoch_data = switch_rates[switch_rates['stoch_quartile'] == stoch_q]
+                if not stoch_data.empty:
+                    plt.plot(stoch_data['signal_quartile'], stoch_data['switch_rate'],
+                             'o-', color=stoch_colors[i], linewidth=2.5, label=f"Stochastic Prob: {stoch_q}")
+
+                    # Add count labels
+                    for _, row in stoch_data.iterrows():
+                        plt.text(row['signal_quartile'], row['switch_rate'] + 2, f"n={row['count']}",
+                                 color=stoch_colors[i], ha='center', fontsize=8)
+        except Exception as e:
+            print(f"Error creating quartile plot: {e}")
+            plt.text(0.5, 0.5, "Could not create quartile plot", ha='center', va='center')
+
+        plt.axhline(y=50, color='black', linestyle='--', alpha=0.5)
+        plt.xlabel('Signal Quartile', fontsize=12)
+        plt.ylabel('Switch Rate (%)', fontsize=12)
+        plt.title('Actual Switch Rates by Signal Quartile and State Probability', fontsize=14)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.ylim(0, 100)
+
+        # Third subplot: Coefficient forest plot (only if we have model 3 with state vars)
+        plt.subplot(2, 2, 3)
+
+        if model3 is not None and model3 is not model1:
+            try:
+                # Get coefficients and confidence intervals from model 3
+                coefs = model3.params[1:]  # Skip intercept
+                conf_int = model3.conf_int()
+                conf_int = conf_int.loc[coefs.index]
+
+                # Calculate odds ratios and confidence intervals for odds ratios
+                odds_ratios = np.exp(coefs)
+                odds_ratio_ci = np.exp(conf_int)
+
+                # Create forest plot
+                y_pos = np.arange(len(coefs))
+
+                plt.errorbar(odds_ratios, y_pos, xerr=[odds_ratios - odds_ratio_ci.iloc[:, 0],
+                                                       odds_ratio_ci.iloc[:, 1] - odds_ratios],
+                             fmt='o', capsize=5, color='blue', markersize=8)
+
+                # Add vertical line at odds ratio = 1 (no effect)
+                plt.axvline(x=1, color='red', linestyle='--', linewidth=1.5)
+
+                # Add labels
+                plt.yticks(y_pos, coefs.index)
+                plt.xlabel('Odds Ratio (log scale)', fontsize=12)
+                plt.title('Odds Ratios with 95% Confidence Intervals', fontsize=14)
+
+                # Use log scale for x-axis to better visualize odds ratios
+                plt.xscale('log')
+                plt.grid(True, alpha=0.3)
+
+                # Add significance markers
+                for i, p_val in enumerate(model3.pvalues[1:]):
+                    marker = '*' * sum([p_val < threshold for threshold in [0.05, 0.01, 0.001]])
+                    if marker:
+                        plt.text(odds_ratios.iloc[i] * 1.1, i, marker, fontsize=14)
+            except Exception as e:
+                print(f"Error creating forest plot: {e}")
+                plt.text(0.5, 0.5, "Could not create forest plot", ha='center', va='center')
+        else:
+            if model3 is model1:
+                plt.text(0.5, 0.5, "Model 3 identical to Model 1 - no state effects to show", ha='center', va='center')
+            else:
+                plt.text(0.5, 0.5, "Model 3 not available", ha='center', va='center')
+
+        # Fourth subplot: Model comparison
+        plt.subplot(2, 2, 4)
+
+        if aic_values:
+            try:
+                # Plot AIC values
+                bar_positions = np.arange(len(aic_values))
+                bar_colors = ['blue', 'green', 'orange', 'red'][:len(aic_values)]
+                bars = plt.bar(bar_positions, aic_values, color=bar_colors)
+                plt.ylabel('AIC (lower is better)', fontsize=12)
+                plt.title('Model Comparison', fontsize=14)
+                plt.xticks(bar_positions, model_names, rotation=15)
+                plt.grid(True, axis='y', alpha=0.3)
+
+                # Highlight best model
+                if best_model_idx is not None:
+                    bars[best_model_idx].set_color('purple')
+
+                # Add R² values on top of bars
+                r2_values = []
+                for model_name in model_names:
+                    if model_name == "Signal Only":
+                        r2_values.append(r2_model1)
+                    elif model_name == "State Only":
+                        r2_values.append(r2_model2)
+                    elif model_name == "Signal + State":
+                        r2_values.append(r2_model3)
+                    elif model_name == "Signal + State + Interaction":
+                        r2_values.append(r2_model4)
+
+                for i, (r2, bar) in enumerate(zip(r2_values, bars)):
+                    if r2 is not None:
+                        plt.text(bar.get_x() + bar.get_width() / 2., bar.get_height() - 5,
+                                 f'R² = {r2:.3f}', ha='center', fontsize=10, color='white', fontweight='bold')
+            except Exception as e:
+                print(f"Error creating model comparison plot: {e}")
+                plt.text(0.5, 0.5, "Could not create model comparison plot", ha='center', va='center')
+        else:
+            plt.text(0.5, 0.5, "No models available for comparison", ha='center', va='center')
+
+        plt.tight_layout()
+
+        # Save the figure
+        save_figure(plt.gcf(), subject_id, "pooled", f"signal_state_regression_{signal_window}_{condition}")
+
+        plt.show()
+
+    # Create a summary of the results
+    summary = {
         'subject_id': subject_id,
-        'baseline_win_switch': baseline_win_switch,
-        'baseline_loss_switch': baseline_loss_switch,
-        'loss_normalized': loss_normalized,
-        'win_normalized': win_normalized,
-        'loss_slope': loss_slope,
-        'win_slope': win_slope,
-        'slope_difference': loss_slope - win_slope,
-        'bootstrap_mean_diff': mean_diff,
-        'bootstrap_ci_low': ci_low,
-        'bootstrap_ci_high': ci_high,
-        'bootstrap_p_value': p_value
+        'signal_window': signal_window,
+        'condition': condition,
+        'total_trials': len(data),
+        'state_variation': state_use_for_model
     }
+
+    # Add model results to summary (if models exist)
+    summary['models'] = {}
+
+    if model1 is not None:
+        summary['models']['signal_only'] = {
+            'coefficients': model1.params.to_dict(),
+            'pvalues': model1.pvalues.to_dict(),
+            'odds_ratios': odds_ratios1.to_dict(),
+            'aic': model1.aic,
+            'r2': r2_model1
+        }
+
+    if model2 is not None:
+        summary['models']['state_only'] = {
+            'coefficients': model2.params.to_dict(),
+            'pvalues': model2.pvalues.to_dict(),
+            'odds_ratios': odds_ratios2.to_dict(),
+            'aic': model2.aic,
+            'r2': r2_model2
+        }
+
+    if model3 is not None and model3 is not model1:
+        summary['models']['signal_and_state'] = {
+            'coefficients': model3.params.to_dict(),
+            'pvalues': model3.pvalues.to_dict(),
+            'odds_ratios': odds_ratios3.to_dict(),
+            'aic': model3.aic,
+            'r2': r2_model3
+        }
+
+    if model4 is not None:
+        summary['models']['full_model'] = {
+            'coefficients': model4.params.to_dict(),
+            'pvalues': model4.pvalues.to_dict(),
+            'odds_ratios': odds_ratios4.to_dict(),
+            'aic': model4.aic,
+            'r2': r2_model4
+        }
+
+    # Add model comparisons to summary (if available)
+    if comp1 is not None or comp2 is not None or comp3 is not None:
+        summary['model_comparisons'] = {}
+        if comp1 is not None:
+            summary['model_comparisons']['signal_and_state_vs_signal'] = comp1
+        if comp2 is not None:
+            summary['model_comparisons']['signal_and_state_vs_state'] = comp2
+        if comp3 is not None:
+            summary['model_comparisons']['full_model_vs_signal_and_state'] = comp3
+
+    # Add best model info if available
+    if best_model_idx is not None:
+        summary['best_model'] = {
+            'name': model_names[best_model_idx],
+            'index': best_model_idx + 1
+        }
+
+    return summary
