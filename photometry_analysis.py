@@ -865,6 +865,329 @@ def all_results(win_loss=False, force_recompute=False):
     return analyze_all_subjects(win_loss=win_loss, force_recompute=force_recompute)
 
 
+def analyze_group_reward_rates(behavior_df=None, min_trials=100, save_fig=True, subjids=None):
+    """
+    Calculate and plot average reward rates across sessions for all subjects chronologically.
+
+    Parameters:
+    -----------
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavioral dataframe to analyze. If None, will load from parquet.
+    min_trials : int, optional
+        Minimum number of trials required to include a session (default=100)
+    save_fig : bool, optional
+        Whether to save the generated figure (default=True)
+    subjids : list, optional
+        List of subject IDs to include in the analysis. If None, use all subjects.
+
+    Returns:
+    --------
+    dict: Dictionary with reward rate data by subject and session
+    """
+    # Load behavior data if not provided
+    if behavior_df is None:
+        try:
+            behavior_df = load_filtered_behavior_data("MatchingPennies")
+            print(f"Loaded behavior data from parquet file: {len(behavior_df)} rows")
+        except Exception as e:
+            print(f"Error loading behavior data: {e}")
+            return None
+
+    # Prepare storage for results
+    results = {
+        'subjects': [],
+        'session_reward_rates': {},
+        'max_sessions': 0,
+        'subject_avg_rates': {},  # Store average reward rate per subject
+        'subject_session_counts': {}  # Store session count per subject
+    }
+
+    # Get unique subjects, filtered by provided list if specified
+    all_subjects = behavior_df['subjid'].unique()
+    if subjids is not None:
+        subjects = [s for s in all_subjects if s in subjids]
+        print(f"Filtering {len(all_subjects)} subjects to {len(subjects)} specified subjects")
+    else:
+        subjects = all_subjects
+
+    results['subjects'] = list(subjects)
+    print(f"Analyzing {len(subjects)} subjects")
+
+    # Process each subject
+    for subject_id in subjects:
+        print(f"Processing {subject_id}...")
+        subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+
+        # Sort sessions chronologically
+        sessions = sorted(subject_data['date'].unique())
+        session_reward_rates = []
+
+        for session_date in sessions:
+            session_df = subject_data[subject_data['date'] == session_date]
+
+            # Skip sessions with too few trials
+            if len(session_df) < min_trials:
+                print(f"  Skipping {subject_id}/{session_date}, fewer than {min_trials} trials ({len(session_df)})")
+                continue
+
+            # Get rewards for this session
+            rewards = session_df['reward'].values
+            window_size = 20
+            reward_rates = []
+            overall_rate = np.mean(rewards)
+
+            # Calculate moving average reward rate
+            for i in range(len(rewards)):
+                if i < window_size:
+                    available_data = rewards[:i + 1]
+                    missing_data_weight = (window_size - len(available_data)) / window_size
+                    rate = (np.sum(available_data) + missing_data_weight * window_size * overall_rate) / window_size
+                else:
+                    rate = np.mean(rewards[i - window_size + 1:i + 1])
+                reward_rates.append(rate)
+
+            # Calculate average reward rate for the session
+            session_avg_rate = np.mean(reward_rates)
+            session_reward_rates.append(session_avg_rate)
+            print(
+                f"  {subject_id}/{session_date}: Average reward rate = {session_avg_rate:.3f} ({len(session_df)} trials)")
+
+        # Store session data for this subject
+        results['session_reward_rates'][subject_id] = session_reward_rates
+        results['max_sessions'] = max(results['max_sessions'], len(session_reward_rates))
+
+        # Calculate and store the average reward rate across all sessions for this subject
+        if session_reward_rates:
+            avg_reward_rate = np.mean(session_reward_rates)
+            results['subject_avg_rates'][subject_id] = avg_reward_rate
+            results['subject_session_counts'][subject_id] = len(session_reward_rates)
+
+    # Plot the results
+    plt.figure(figsize=(12, 8))
+
+    # Create colors for subjects
+    num_subjects = len(subjects)
+    colors = plt.cm.viridis(np.linspace(0, 0.9, num_subjects))
+
+    # Plot each subject's reward rate progression
+    for i, subject_id in enumerate(subjects):
+        rates = results['session_reward_rates'][subject_id]
+        if rates:
+            # Create enhanced legend label with session count and average reward rate
+            session_count = results['subject_session_counts'][subject_id]
+            avg_rate = results['subject_avg_rates'][subject_id]
+            label = f"{subject_id} (Sessions: {session_count}, RR: {avg_rate:.2f})"
+
+            plt.plot(range(1, len(rates) + 1), rates, 'o-',
+                     color=colors[i], linewidth=2, label=label)
+
+    # Add a reference line at 0.5
+    plt.axhline(y=0.5, color='red', linestyle='--', linewidth=1.5)
+
+    # Set axis labels and title
+    plt.xlabel('Session Number', fontsize=14)
+    plt.ylabel('Average Reward Rate', fontsize=14)
+    plt.title('Reward Rate Progression Across Sessions by Subject', fontsize=16)
+
+    # Set axis limits
+    plt.xlim(0.5, results['max_sessions'] + 0.5)
+    plt.ylim(0, 1)
+    plt.grid(True, alpha=0.3)
+
+    # Add legend (outside plot if many subjects)
+    if num_subjects > 10:
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    else:
+        plt.legend(loc='upper right')
+
+    plt.tight_layout()
+
+    # Save the figure
+    if save_fig:
+        figure_path = os.path.join(output_dir, "group_analysis")
+        ensure_directory_exists(figure_path)
+        fig_file = os.path.join(figure_path, f"group_reward_rates.png")
+
+        try:
+            plt.savefig(fig_file, dpi=300, bbox_inches='tight')
+            print(f"Saved figure to {fig_file}")
+        except Exception as e:
+            print(f"Error saving figure: {e}")
+
+    plt.show()
+
+
+def analyze_group_computer_confidence(behavior_df=None, min_trials=100, save_fig=True, subjids=None):
+    """
+    Calculate and plot average computer confidence across sessions for all subjects chronologically.
+
+    Parameters:
+    -----------
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavioral dataframe to analyze. If None, will load from parquet.
+    min_trials : int, optional
+        Minimum number of trials required to include a session (default=100)
+    save_fig : bool, optional
+        Whether to save the generated figure (default=True)
+    subjids : list, optional
+        List of subject IDs to include in the analysis. If None, use all subjects.
+
+    Returns:
+    --------
+    dict: Dictionary with computer confidence data by subject and session
+    """
+    # Load behavior data if not provided
+    if behavior_df is None:
+        try:
+            behavior_df = load_filtered_behavior_data("MatchingPennies")
+            print(f"Loaded behavior data from parquet file: {len(behavior_df)} rows")
+        except Exception as e:
+            print(f"Error loading behavior data: {e}")
+            return None
+
+    # Check if min_pvalue is in the dataframe
+    if 'min_pvalue' not in behavior_df.columns:
+        print("Error: 'min_pvalue' column not found in behavior data")
+        return None
+
+    # Prepare storage for results
+    results = {
+        'subjects': [],
+        'session_confidence': {},
+        'max_sessions': 0,
+        'subject_avg_confidence': {},  # Store average confidence per subject
+        'subject_session_counts': {}  # Store session count per subject
+    }
+
+    # Get unique subjects, filtered by provided list if specified
+    all_subjects = behavior_df['subjid'].unique()
+    if subjids is not None:
+        subjects = [s for s in all_subjects if s in subjids]
+        print(f"Filtering {len(all_subjects)} subjects to {len(subjects)} specified subjects")
+    else:
+        subjects = all_subjects
+
+    results['subjects'] = list(subjects)
+    print(f"Analyzing {len(subjects)} subjects")
+
+    # Process each subject
+    for subject_id in subjects:
+        print(f"Processing {subject_id}...")
+        subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+
+        # Sort sessions chronologically
+        sessions = sorted(subject_data['date'].unique())
+        session_confidence = []
+
+        for session_date in sessions:
+            session_df = subject_data[subject_data['date'] == session_date]
+
+            # Skip sessions with too few trials
+            if len(session_df) < min_trials:
+                print(f"  Skipping {subject_id}/{session_date}, fewer than {min_trials} trials ({len(session_df)})")
+                continue
+
+            # Get p-values for this session
+            p_values = session_df['min_pvalue'].values
+
+            # Replace NaN values with 1.0 (no confidence)
+            p_values = np.nan_to_num(p_values, nan=1.0)
+
+            # Apply cutoff for very small p-values (p < 10^-12)
+            min_p_value = 1e-12
+            p_values = np.maximum(p_values, min_p_value)
+
+            # Calculate confidence as -log10(p)
+            confidence = -np.log10(p_values)
+
+            # Calculate moving average confidence with window size 20
+            window_size = 20
+            confidence_values = []
+            overall_confidence = np.mean(confidence)
+
+            # Calculate moving average
+            for i in range(len(confidence)):
+                if i < window_size:
+                    available_data = confidence[:i + 1]
+                    missing_data_weight = (window_size - len(available_data)) / window_size
+                    conf = (np.sum(
+                        available_data) + missing_data_weight * window_size * overall_confidence) / window_size
+                else:
+                    conf = np.mean(confidence[i - window_size + 1:i + 1])
+                confidence_values.append(conf)
+
+            # Calculate average confidence for the session
+            session_avg_conf = np.mean(confidence_values)
+            session_confidence.append(session_avg_conf)
+            print(
+                f"  {subject_id}/{session_date}: Average confidence = {session_avg_conf:.3f} ({len(session_df)} trials)")
+
+        # Store session data for this subject
+        results['session_confidence'][subject_id] = session_confidence
+        results['max_sessions'] = max(results['max_sessions'], len(session_confidence))
+
+        # Calculate and store the average confidence across all sessions for this subject
+        if session_confidence:
+            avg_confidence = np.mean(session_confidence)
+            results['subject_avg_confidence'][subject_id] = avg_confidence
+            results['subject_session_counts'][subject_id] = len(session_confidence)
+
+    # Plot the results
+    plt.figure(figsize=(12, 8))
+
+    # Create colors for subjects
+    num_subjects = len(subjects)
+    colors = plt.cm.viridis(np.linspace(0, 0.9, num_subjects))
+
+    # Plot each subject's confidence progression
+    for i, subject_id in enumerate(subjects):
+        confidence = results['session_confidence'][subject_id]
+        if confidence:
+            # Create enhanced legend label with session count and average confidence
+            session_count = results['subject_session_counts'][subject_id]
+            avg_conf = results['subject_avg_confidence'][subject_id]
+            label = f"{subject_id} (Sessions: {session_count}, CC: {avg_conf:.2f})"
+
+            plt.plot(range(1, len(confidence) + 1), confidence, 'o-',
+                     color=colors[i], linewidth=2, label=label)
+
+    # Add a reference line at p=0.05 (-log10(0.05) ≈ 1.3)
+    p_05_line = -np.log10(0.05)
+    plt.axhline(y=p_05_line, color='red', linestyle='--', linewidth=1.5,
+                label='p = 0.05')
+
+    # Set axis labels and title
+    plt.xlabel('Session Number', fontsize=14)
+    plt.ylabel('Computer Confidence (-log10(p))', fontsize=14)
+    plt.title('Computer Confidence Progression Across Sessions by Subject', fontsize=16)
+
+    # Set axis limits
+    plt.xlim(0.5, results['max_sessions'] + 0.5)
+    plt.grid(True, alpha=0.3)
+
+    # Add legend (outside plot if many subjects)
+    if num_subjects > 10:
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    else:
+        plt.legend(loc='upper right')
+
+    plt.tight_layout()
+
+    # Save the figure
+    if save_fig:
+        figure_path = os.path.join(output_dir, "group_analysis")
+        ensure_directory_exists(figure_path)
+        fig_file = os.path.join(figure_path, f"group_computer_confidence.png")
+
+        try:
+            plt.savefig(fig_file, dpi=300, bbox_inches='tight')
+            print(f"Saved figure to {fig_file}")
+        except Exception as e:
+            print(f"Error saving figure: {e}")
+
+    plt.show()
+
+
 def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False, behavior_df=None):
     """
     Analyze photometry signals binned by reward rate quartiles for a single session or pooled across sessions
