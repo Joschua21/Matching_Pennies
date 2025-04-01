@@ -1361,10 +1361,10 @@ def plot_choice_history(behavior_data, subject_id, session_date):
     
     return fig
 
-
 def plot_per_session_win_loss(subject_id, behavior_df=None):
     """
     Plot win/loss traces for each session of a subject with choice history
+    and state probabilities
     
     Parameters:
     -----------
@@ -1426,159 +1426,228 @@ def plot_per_session_win_loss(subject_id, behavior_df=None):
 
         # Filter out missed trials
         non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
-                                  if idx in session_result["non_m_trials"]])
-
-        # Get reward outcomes and photometry data
+                                if idx in session_result["non_m_trials"]])
+        
+        # Get reward outcomes and photometry data for valid non-missed trials
         reward_outcomes = session_result["reward_outcomes"][non_m_indices]
         session_plots = session_result['plotting_data']
 
         # Separate rewarded and unrewarded trials
-        rewarded_trials = session_plots[reward_outcomes == 1]
-        unrewarded_trials = session_plots[reward_outcomes == 0]
-
-        # Compute average rewarded and unrewarded signals
-        if len(rewarded_trials) > 0:
-            rewarded_avg = np.mean(rewarded_trials, axis=0)
-            rewarded_sem = calculate_sem(rewarded_trials, axis=0)
-            max_peak = max(max_peak, np.max(rewarded_avg + rewarded_sem))
-            min_peak = min(min_peak, np.min(rewarded_avg - rewarded_sem))
+        win_plots = session_plots[reward_outcomes == 1]
+        loss_plots = session_plots[reward_outcomes == 0]
+        
+        # Skip this session if not enough win/loss trials
+        if len(win_plots) < 5 or len(loss_plots) < 5:
+            print(f"Skipping {subject_id}/{session_date}, not enough win/loss trials.")
+            valid_sessions.pop()  # Remove from valid sessions
+            continue
             
-        if len(unrewarded_trials) > 0:
-            unrewarded_avg = np.mean(unrewarded_trials, axis=0)
-            unrewarded_sem = calculate_sem(unrewarded_trials, axis=0)
-            max_peak = max(max_peak, np.max(unrewarded_avg + unrewarded_sem))
-            min_peak = min(min_peak, np.min(unrewarded_avg - unrewarded_sem))
-
-    # Add 20% padding to y-axis limits
-    y_range = max_peak - min_peak
-    y_max = max_peak + 0.1 * y_range
-    y_min = min_peak - 0.1 * y_range
-
-    # Calculate number of sessions and rows/columns for subplots
-    n_sessions = len(valid_sessions)  # Use count of valid sessions
-    if n_sessions == 0:
-        print(f"No valid sessions found for {subject_id} (all have < 100 trials)")
+        # Calculate averages
+        win_avg = np.mean(win_plots, axis=0)
+        loss_avg = np.mean(loss_plots, axis=0)
+        
+        # Calculate SEMs
+        win_sem = calculate_sem(win_plots, axis=0)
+        loss_sem = calculate_sem(loss_plots, axis=0)
+        
+        # Find max/min for y-axis scaling
+        max_peak = max(max_peak, np.max(win_avg + win_sem), np.max(loss_avg + loss_sem))
+        min_peak = min(min_peak, np.min(win_avg - win_sem), np.min(loss_avg - loss_sem))
+        
+        # Store session data
+        session_analyses[session_date] = {
+            'win_avg': win_avg,
+            'loss_avg': loss_avg,
+            'win_sem': win_sem,
+            'loss_sem': loss_sem,
+            'win_count': len(win_plots),
+            'loss_count': len(loss_plots),
+            'session_result': session_result  # Keep the full result for later
+        }
+    
+    if not valid_sessions:
+        print(f"No valid sessions found for {subject_id}")
         return {}
         
-    n_cols = 3  # Always 3 columns
-    n_rows = (n_sessions + n_cols - 1) // n_cols  # Ceiling division for number of rows needed
+    # Add some buffer to y-axis limits
+    y_range = max_peak - min_peak
+    y_max = max_peak + 0.05 * y_range
+    y_min = min_peak - 0.05 * y_range
+    
+    # Calculate layout
+    n_sessions = len(valid_sessions)
+    n_cols = 3  # Show 5 sessions per row
+    n_rows = (n_sessions + n_cols - 1) // n_cols  # Ceiling division
     
     # Create figure with proper size
-    fig = plt.figure(figsize=(18, 5*n_rows))  # Wider figure, height based on number of rows
+    fig = plt.figure(figsize=(18, 8*n_rows))  # Each row is 7 inches tall
     
-    # Create GridSpec to control the layout - 2 rows per session (photometry + choice)
-    gs = plt.GridSpec(n_rows*2, n_cols, height_ratios=[2, 1] * n_rows)  # Repeat [2,1] pattern for each row
+    # Add a big general title above all plots
+    fig.suptitle(f"Session History for {subject_id}", fontsize=24, y=0.98)
     
-    # Process only valid sessions
+    # Create GridSpec to control the layout - 3 rows per session (photometry + choice + state)
+    gs = plt.GridSpec(n_rows*3, n_cols, height_ratios=[2, 1, 1] * n_rows)  # Repeat [2,1,1] pattern for each row
+    
+    # Second pass: create all the plots
+    time_axis = None
+    
     for i, session_date in enumerate(valid_sessions):
-        row = i // n_cols  # Row index (integer division)
-        col = i % n_cols   # Column index
+        row = i // n_cols
+        col = i % n_cols
         
-        # Pass behavior_df to process_session to reuse data
-        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
-        if not session_result:
-            continue
-
-        # Filter out missed trials
-        non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
-                                  if idx in session_result["non_m_trials"]])
-
-        # Get reward outcomes and photometry data
-        reward_outcomes = session_result["reward_outcomes"][non_m_indices]
-        session_plots = session_result['plotting_data']
-
-        # Separate rewarded and unrewarded trials
-        rewarded_trials = session_plots[reward_outcomes == 1]
-        unrewarded_trials = session_plots[reward_outcomes == 0]
-
-        # Create subplot for photometry data (top row for this session)
-        ax_photo = fig.add_subplot(gs[row*2, col])
+        session_data = session_analyses[session_date]
+        session_result = session_data['session_result']
+        behavior_data = session_result['behavioral_data']
         
-        # Photometry data - rewarded
-        if len(rewarded_trials) > 0:
-            rewarded_avg = np.mean(rewarded_trials, axis=0)
-            rewarded_sem = calculate_sem(rewarded_trials, axis=0)
-            ax_photo.fill_between(session_result['time_axis'],
-                       rewarded_avg - rewarded_sem,
-                       rewarded_avg + rewarded_sem,
-                       color='lightgreen', alpha=0.3)
-            ax_photo.plot(session_result['time_axis'], rewarded_avg,
-                 color='green', linewidth=2,
-                 label=f'Win (n={len(rewarded_trials)})')
+        # Set time axis from the first valid session if not set yet
+        if time_axis is None:
+            time_axis = session_result['time_axis']
+            
+        # Photometry plot (1st row of 3 for this session)
+        ax1 = fig.add_subplot(gs[row*3, col])
         
-        # Photometry data - unrewarded
-        if len(unrewarded_trials) > 0:
-            unrewarded_avg = np.mean(unrewarded_trials, axis=0)
-            unrewarded_sem = calculate_sem(unrewarded_trials, axis=0)
-            ax_photo.fill_between(session_result['time_axis'],
-                       unrewarded_avg - unrewarded_sem,
-                       unrewarded_avg + unrewarded_sem,
-                       color='lightsalmon', alpha=0.3)
-            ax_photo.plot(session_result['time_axis'], unrewarded_avg,
-                 color='darkorange', linewidth=2,
-                 label=f'Loss (n={len(unrewarded_trials)})')
+        # Plot reward outcomes - using pre-calculated values from first pass
+        ax1.fill_between(time_axis, 
+                         session_data['win_avg'] - session_data['win_sem'],
+                         session_data['win_avg'] + session_data['win_sem'],
+                         color='lightgreen', alpha=0.3)
+                         
+        ax1.plot(time_axis, session_data['win_avg'], color='green', linewidth=2, 
+                 label=f'Win (n={session_data["win_count"]})')
+                 
+        ax1.fill_between(time_axis, 
+                         session_data['loss_avg'] - session_data['loss_sem'],
+                         session_data['loss_avg'] + session_data['loss_sem'],
+                         color='lightsalmon', alpha=0.3)
+                         
+        ax1.plot(time_axis, session_data['loss_avg'], color='darkorange', linewidth=2,
+                 label=f'Loss (n={session_data["loss_count"]})')
         
         # Add vertical line at cue onset
-        ax_photo.axvline(x=0, color='red', linestyle='--', linewidth=1.5)
-        ax_photo.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        ax1.axvline(x=0, color='black', linestyle='--', linewidth=1, label='Lick Timing')
         
-        # Set y-axis limit consistent across all photometry subplots
-        ax_photo.set_ylim([y_min, y_max])
+        # Use consistent y-axis scaling across all sessions
+        ax1.set_ylim(y_min, y_max)
         
-        # Labels and formatting for photometry subplot
-        ax_photo.set_xlabel('Time (s)')
-        ax_photo.set_ylabel('ΔF/F')
-        ax_photo.set_title(f'Session {session_date} (n={len(rewarded_trials) + len(unrewarded_trials)} trials)')
-        ax_photo.legend(loc='upper right')
+        # Add horizontal line at y=0
+        ax1.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
         
-        # Store analysis results
-        session_analyses[session_date] = {
-            'rewarded_avg': rewarded_avg if len(rewarded_trials) > 0 else None,
-            'unrewarded_avg': unrewarded_avg if len(unrewarded_trials) > 0 else None,
-            'rewarded_n': len(rewarded_trials),
-            'unrewarded_n': len(unrewarded_trials),
-            'time_axis': session_result['time_axis']
-        }
+        # Only add x labels to bottom row
+        ax1.set_xlabel('Time (s)')
         
-        # Create subplot for choice history (bottom row)
-        ax_choice = fig.add_subplot(gs[row*2 + 1, col])
+        # Only add y labels to leftmost column
+        if col == 0:
+            ax1.set_ylabel('ΔF/F')
+            
+        ax1.set_title(f"{session_date}", fontsize=12)
         
+        # Add legend to first plot only
+        if i == 0:
+            ax1.legend(loc='upper right')
+        
+        # Choice history plot (2nd row of 3 for this session)
+        ax2 = fig.add_subplot(gs[row*3 + 1, col])
+
         # Extract choices and rewards
-        choices = session_result['behavioral_data']['choice']
-        rewards = session_result['behavioral_data']['reward']
-        
+        choices = np.array(behavior_data['choice'])
+        rewards = np.array(behavior_data['reward'])
+
         # Plot choice history
         for j, choice in enumerate(choices):
             if choice == 'L':
-                ax_choice.plot([j + 1, j + 1], [0, 1], 'r-', linewidth=1.5)
+                ax2.plot([j + 1, j + 1], [0, 1], 'r-', linewidth=1.5)
                 if rewards[j] == 1:
-                    ax_choice.plot(j + 1, 1, 'ro', markersize=8, fillstyle='none')
+                    ax2.plot(j + 1, 1, 'ro', markersize=8, fillstyle='none')
             elif choice == 'R':
-                ax_choice.plot([j + 1, j + 1], [0, -1], 'b-', linewidth=1.5)
+                ax2.plot([j + 1, j + 1], [0, -1], 'b-', linewidth=1.5)
                 if rewards[j] == 1:
-                    ax_choice.plot(j + 1, -1, 'bo', markersize=8, fillstyle='none')
-        
-        # Add the middle line
-        ax_choice.axhline(y=0, color='k', linestyle='-', alpha=0.5)
-        
-        # Set the y-axis limits and labels
-        ax_choice.set_ylim(-1.5, 1.5)
-        ax_choice.set_yticks([-1, 0, 1])
-        ax_choice.set_yticklabels(['Right', '', 'Left'])
-        
-        # Set the x-axis and title
-        ax_choice.set_xlabel('Trial Number')
-        ax_choice.set_title('Choice History')
-        ax_choice.grid(True, alpha=0.3)
+                    ax2.plot(j + 1, -1, 'bo', markersize=8, fillstyle='none')
+            # 'M' choices result in a gap (no line)
 
-    plt.tight_layout()
+        # Add the middle line
+        ax2.axhline(y=0, color='k', linestyle='-', alpha=0.5)
+
+        # Set the y-axis limits and labels
+        ax2.set_ylim(-1.5, 1.5)
+        ax2.set_yticks([-1, 0, 1])
+        ax2.set_yticklabels(['Right', '', 'Left'])
+
+        # Set the x-axis and title
+        ax2.set_xlabel('Trial Number')
+        ax2.set_title('Choice History')
+        ax2.grid(True, alpha=0.3)
+
+
+        # State probabilities plot (3rd row of 3 for this session)
+        ax3 = fig.add_subplot(gs[row*3 + 2, col])
+        
+        # Get state probability data for this session
+        if behavior_df is not None:
+            session_df = behavior_df[(behavior_df['subjid'] == subject_id) & 
+                                    (behavior_df['date'] == session_date)]
+        else:
+            # Load from parquet file - this should rarely happen with your new approach
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            session_df = df[(df['subjid'] == subject_id) & 
+                            (df['date'] == session_date) & 
+                            (df["ignore"] == 0) & 
+                            (df['protocol'].str.contains('MatchingPennies', na=False))]
+        
+        if not session_df.empty and 'p_stochastic' in session_df.columns:
+            # Plot state probabilities if available
+            x_values = np.arange(len(session_df))
+            
+            # Plot each state probability
+            ax3.plot(x_values, session_df['p_stochastic'], color='green', linewidth=1.5, label='Stochastic')
+            ax3.plot(x_values, session_df['p_leftbias'], color='red', linewidth=1.5, label='Left Bias')
+            ax3.plot(x_values, session_df['p_rightbias'], color='blue', linewidth=1.5, label='Right Bias')
+            
+            # Add threshold line
+            ax3.axhline(y=0.8, color='black', linestyle='--', linewidth=0.5, alpha=0.7, label='Threshold')
+            
+            # Add text marker for highest probability at final trial
+            final_idx = len(session_df) - 1
+            if final_idx >= 0:
+                probs = {
+                    'Stochastic': session_df.iloc[final_idx]['p_stochastic'],
+                    'Left Bias': session_df.iloc[final_idx]['p_leftbias'],
+                    'Right Bias': session_df.iloc[final_idx]['p_rightbias']
+                }
+                max_state = max(probs, key=probs.get)
+                max_prob = probs[max_state]
+                
+                if max_prob >= 0.8:  # Only add marker if probability is high enough
+                    ax3.text(final_idx, max_prob, max_state[0], 
+                            fontsize=8, ha='center', va='bottom')
+                    
+            # Set y-axis limits
+            ax3.set_ylim(-0.05, 1.05)
+            ax3.set_ylabel('State Prob.')
+            
+            # Only show legend for first plot to avoid clutter
+            if i == 0:
+                ax3.legend(loc='upper right', fontsize=7)
+                
+            # Set x-axis limits
+            ax3.set_xlim(0, len(session_df))
+        else:
+            # No state data available
+            ax3.text(0.5, 0.5, "No state probability data", 
+                    ha='center', va='center', transform=ax3.transAxes)
+            ax3.set_ylabel('State Prob.')
+            ax3.set_ylim(0, 1)
+        
+        ax3.set_xlabel('Trial Number')
+    
+    # Adjust layout to make room for the suptitle
+    plt.tight_layout(rect=[0, 0, 1, 0.96])  # Leave space at top for suptitle
     
     # Save the figure
-    save_figure(fig, subject_id, "all_sessions", "per_session_win_loss_with_choices")
+    save_figure(fig, subject_id, "all_sessions", "per_session_win_loss_with_choices_and_states")
     
     plt.show()
     
-    return session_analyses
 
 def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_conf=False, behavior_df=None, sem=True):
     """
@@ -1798,17 +1867,20 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_
     }
 
 
-def analyze_previous_outcome_effect(subject_id, behavior_df=None):
+def analyze_previous_outcome_effect(subject_id, time_split=False, behavior_df=None):
     """
     Analyze photometry signals based on previous and current trial outcomes.
-    
+
     Parameters:
     -----------
     subject_id : str
         The identifier for the subject
+    time_split : bool, optional (default=False)
+        If True, additionally split data by early/middle/late sessions and
+        create separate plots showing temporal evolution
     behavior_df : pandas.DataFrame, optional
         Pre-loaded behavior dataframe to use instead of loading from parquet
-        
+
     Returns:
     --------
     dict: Analysis results
@@ -1823,7 +1895,8 @@ def analyze_previous_outcome_effect(subject_id, behavior_df=None):
             # If behavior_df is provided, filter it for this subject
             subject_data = behavior_df[behavior_df['subjid'] == subject_id]
             matching_pennies_sessions = set(subject_data['date'].unique())
-            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
+            print(
+                f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
         else:
             # Otherwise load from parquet file
             df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
@@ -1836,10 +1909,10 @@ def analyze_previous_outcome_effect(subject_id, behavior_df=None):
 
     # Sort sessions chronologically, filtering to only include MatchingPennies sessions
     sessions = sorted([d for d in os.listdir(subject_path)
-                    if os.path.isdir(os.path.join(subject_path, d)) and
-                    os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
-                    d in matching_pennies_sessions])
-    
+                       if os.path.isdir(os.path.join(subject_path, d)) and
+                       os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                       d in matching_pennies_sessions])
+
     # Process each session and collect results
     all_sessions = []
     all_plotting_data = []
@@ -1847,70 +1920,140 @@ def analyze_previous_outcome_effect(subject_id, behavior_df=None):
     all_curr_rewards = []
     session_dates = []
 
+    # For time split analysis, we'll store data separately for each time period
+    if time_split:
+        # First pass: identify valid sessions with enough trials
+        valid_sessions = []
+        
+        # Check each session for having enough trials
+        for session_date in sessions:
+            session_path = os.path.join(subject_path, session_date)
+            if os.path.isdir(session_path) and os.path.exists(os.path.join(session_path, "deltaff.npy")):
+                # Process session to check trial count
+                result = process_session(subject_id, session_date, behavior_df=behavior_df)
+                if result and len(result['non_m_trials']) >= 100:
+                    valid_sessions.append(session_date)
+                else:
+                    print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
 
+        # Now split the valid sessions evenly
+        num_valid = len(valid_sessions)
+        if num_valid < 3:
+            print(f"Warning: Only {num_valid} valid sessions available. Need at least 3 for time split analysis.")
+            time_split = False  # Fall back to non-split analysis
+        else:
+            # Calculate split points for even division
+            early_end = num_valid // 3
+            middle_end = 2 * (num_valid // 3)
+            
+            # Adjust for remainder (ensure most even split possible)
+            if num_valid % 3 == 1:
+                # Add the extra session to the last group
+                early_sessions = valid_sessions[:early_end]
+                middle_sessions = valid_sessions[early_end:middle_end]
+                late_sessions = valid_sessions[middle_end:]
+            elif num_valid % 3 == 2:
+                # Add one extra session to middle and late groups
+                early_sessions = valid_sessions[:early_end]
+                middle_sessions = valid_sessions[early_end:middle_end+1]
+                late_sessions = valid_sessions[middle_end+1:]
+            else:
+                # Perfect division
+                early_sessions = valid_sessions[:early_end]
+                middle_sessions = valid_sessions[early_end:middle_end]
+                late_sessions = valid_sessions[middle_end:]
+
+            # Initialize data containers for each time period
+            time_periods = {
+                'early': {'sessions': [], 'plotting_data': [], 'prev_rewards': [], 'curr_rewards': []},
+                'middle': {'sessions': [], 'plotting_data': [], 'prev_rewards': [], 'curr_rewards': []},
+                'late': {'sessions': [], 'plotting_data': [], 'prev_rewards': [], 'curr_rewards': []}
+            }
+            
+            print(f"Time split analysis: Early ({len(early_sessions)} sessions), " +
+                  f"Middle ({len(middle_sessions)} sessions), Late ({len(late_sessions)} sessions)")
 
     # Process sessions in chronological order
-    for session_date in sessions:
+    for idx, session_date in enumerate(sessions):
         session_path = os.path.join(subject_path, session_date)
         if os.path.isdir(session_path) and os.path.exists(os.path.join(session_path, "deltaff.npy")):
             print(f"Processing {subject_id}/{session_date}...")
             # Pass behavior_df to process_session to reuse data
             result = process_session(subject_id, session_date, behavior_df=behavior_df)
             if result:
-                if len(result['non_m_trials']) < 100: 
-                    print(f"Skipping {subject_id}/{session_date} due to low number of trials")
+                if len(result['non_m_trials']) < 100:
+                    print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
                     continue
 
                 all_sessions.append(result)
                 session_dates.append(session_date)
-                
+
                 # Get behavioral data
                 behavior_data = result['behavioral_data']
                 rewards = behavior_data['reward']
-                
+
                 # Filter out missed trials
                 non_m_indices = np.array([i for i, idx in enumerate(result["valid_trials"])
-                                        if idx in result["non_m_trials"]])
-                
+                                          if idx in result["non_m_trials"]])
+
                 # Extract data for valid trials
                 session_plots = result['plotting_data']
                 curr_rewards = result["reward_outcomes"][non_m_indices]
-                
+
                 # Create previous reward array (shifted)
                 # First trial has no previous trial, assign -1 (will be filtered out)
                 prev_rewards = np.zeros_like(curr_rewards)
                 prev_rewards[0] = -1  # No previous trial for first trial
                 prev_rewards[1:] = curr_rewards[:-1]
-                
-                # Store data
+
+                # Store data for overall analysis
                 all_plotting_data.append(session_plots)
                 all_curr_rewards.append(curr_rewards)
                 all_prev_rewards.append(prev_rewards)
+
+                # If doing time split analysis, store in the appropriate time period
+                if time_split:
+                    # Determine which period this session belongs to
+                    if session_date in early_sessions:
+                        period = 'early'
+                    elif session_date in middle_sessions:
+                        period = 'middle'
+                    elif session_date in late_sessions:
+                        period = 'late'
+                    else:
+                        # Skip sessions that were excluded during validation
+                        continue
+                        
+                    time_periods[period]['sessions'].append(result)
+                    time_periods[period]['plotting_data'].append(session_plots)
+                    time_periods[period]['curr_rewards'].append(curr_rewards)
+                    time_periods[period]['prev_rewards'].append(prev_rewards)
     
+
     if not all_sessions:
         print(f"No processed sessions found for subject {subject_id}")
         return None
-        
+
     # Combine all trials from all sessions
     plotting_data = np.vstack(all_plotting_data)
     curr_rewards = np.concatenate(all_curr_rewards)
     prev_rewards = np.concatenate(all_prev_rewards)
-    
+
     # Filter out first trials (no previous outcome)
     valid_trials = prev_rewards != -1
     plotting_data = plotting_data[valid_trials]
     curr_rewards = curr_rewards[valid_trials]
     prev_rewards = prev_rewards[valid_trials]
-    
+
     # Get time axis
     time_axis = all_sessions[0]['time_axis']
-    
+
     # Create condition masks
     prev_win_curr_win = (prev_rewards == 1) & (curr_rewards == 1)
     prev_win_curr_loss = (prev_rewards == 1) & (curr_rewards == 0)
     prev_loss_curr_win = (prev_rewards == 0) & (curr_rewards == 1)
     prev_loss_curr_loss = (prev_rewards == 0) & (curr_rewards == 0)
-    
+
     # Calculate averages and SEM for each condition
     condition_data = {
         'prev_win_curr_win': {
@@ -1938,10 +2081,71 @@ def analyze_previous_outcome_effect(subject_id, behavior_df=None):
             'count': np.sum(prev_loss_curr_loss)
         }
     }
-    
-    # Create the plot
+
+    # If doing time split analysis, compute condition data for each time period
+    time_period_data = {}
+    if time_split:
+        for period in ['early', 'middle', 'late']:
+            if not time_periods[period]['sessions']:
+                print(f"No sessions in {period} period. Skipping.")
+                continue
+
+            # Combine data for this time period
+            period_plotting_data = np.vstack(time_periods[period]['plotting_data'])
+            period_curr_rewards = np.concatenate(time_periods[period]['curr_rewards'])
+            period_prev_rewards = np.concatenate(time_periods[period]['prev_rewards'])
+
+            # Filter out first trials
+            period_valid = period_prev_rewards != -1
+            period_plotting_data = period_plotting_data[period_valid]
+            period_curr_rewards = period_curr_rewards[period_valid]
+            period_prev_rewards = period_prev_rewards[period_valid]
+
+            # Create condition masks
+            period_prev_win_curr_win = (period_prev_rewards == 1) & (period_curr_rewards == 1)
+            period_prev_win_curr_loss = (period_prev_rewards == 1) & (period_curr_rewards == 0)
+            period_prev_loss_curr_win = (period_prev_rewards == 0) & (period_curr_rewards == 1)
+            period_prev_loss_curr_loss = (period_prev_rewards == 0) & (period_curr_rewards == 0)
+
+            # Calculate averages and SEM for each condition
+            time_period_data[period] = {
+                'prev_win_curr_win': {
+                    'data': period_plotting_data[period_prev_win_curr_win],
+                    'avg': np.mean(period_plotting_data[period_prev_win_curr_win], axis=0)
+                    if np.any(period_prev_win_curr_win) else None,
+                    'sem': calculate_sem(period_plotting_data[period_prev_win_curr_win], axis=0)
+                    if np.any(period_prev_win_curr_win) else None,
+                    'count': np.sum(period_prev_win_curr_win)
+                },
+                'prev_win_curr_loss': {
+                    'data': period_plotting_data[period_prev_win_curr_loss],
+                    'avg': np.mean(period_plotting_data[period_prev_win_curr_loss], axis=0)
+                    if np.any(period_prev_win_curr_loss) else None,
+                    'sem': calculate_sem(period_plotting_data[period_prev_win_curr_loss], axis=0)
+                    if np.any(period_prev_win_curr_loss) else None,
+                    'count': np.sum(period_prev_win_curr_loss)
+                },
+                'prev_loss_curr_win': {
+                    'data': period_plotting_data[period_prev_loss_curr_win],
+                    'avg': np.mean(period_plotting_data[period_prev_loss_curr_win], axis=0)
+                    if np.any(period_prev_loss_curr_win) else None,
+                    'sem': calculate_sem(period_plotting_data[period_prev_loss_curr_win], axis=0)
+                    if np.any(period_prev_loss_curr_win) else None,
+                    'count': np.sum(period_prev_loss_curr_win)
+                },
+                'prev_loss_curr_loss': {
+                    'data': period_plotting_data[period_prev_loss_curr_loss],
+                    'avg': np.mean(period_plotting_data[period_prev_loss_curr_loss], axis=0)
+                    if np.any(period_prev_loss_curr_loss) else None,
+                    'sem': calculate_sem(period_plotting_data[period_prev_loss_curr_loss], axis=0)
+                    if np.any(period_prev_loss_curr_loss) else None,
+                    'count': np.sum(period_prev_loss_curr_loss)
+                }
+            }
+
+    # Create the regular (non-time-split) plot
     plt.figure(figsize=(12, 7))
-    
+
     # Define colors and labels
     colors = {
         'prev_win_curr_win': 'darkgreen',
@@ -1949,28 +2153,28 @@ def analyze_previous_outcome_effect(subject_id, behavior_df=None):
         'prev_loss_curr_win': 'mediumseagreen',
         'prev_loss_curr_loss': 'indianred'
     }
-    
+
     labels = {
         'prev_win_curr_win': f"Win-Win (n={condition_data['prev_win_curr_win']['count']})",
         'prev_win_curr_loss': f"Win-Loss (n={condition_data['prev_win_curr_loss']['count']})",
         'prev_loss_curr_win': f"Loss-Win (n={condition_data['prev_loss_curr_win']['count']})",
         'prev_loss_curr_loss': f"Loss-Loss (n={condition_data['prev_loss_curr_loss']['count']})"
     }
-    
+
     # Plot each condition
     for condition, color in colors.items():
         if condition_data[condition]['avg'] is not None:
             plt.fill_between(time_axis,
-                            condition_data[condition]['avg'] - condition_data[condition]['sem'],
-                            condition_data[condition]['avg'] + condition_data[condition]['sem'],
-                            color=color, alpha=0.3)
+                             condition_data[condition]['avg'] - condition_data[condition]['sem'],
+                             condition_data[condition]['avg'] + condition_data[condition]['sem'],
+                             color=color, alpha=0.3)
             plt.plot(time_axis, condition_data[condition]['avg'],
-                    color=color, linewidth=2, label=labels[condition])
-    
+                     color=color, linewidth=2, label=labels[condition])
+
     # Add vertical line at cue onset
     plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
-    
+
     # Labels and formatting
     plt.xlabel('Time (s)', fontsize=16)
     plt.ylabel('ΔF/F', fontsize=16)
@@ -1978,11 +2182,111 @@ def analyze_previous_outcome_effect(subject_id, behavior_df=None):
     plt.xlim([-pre_cue_time, post_cue_time])
     plt.legend(loc='upper right', fontsize=16)
     plt.tight_layout()
-    
+
     # Save the figure
     save_figure(plt.gcf(), subject_id, "pooled", "previous_outcome_effect")
-    
     plt.show()
+
+    # If time_split is enabled, create additional plots
+    if time_split:
+        # Define style parameters for time-split plots
+        period_colors = {'early': 'lightskyblue', 'middle': 'royalblue', 'late': 'darkblue'}
+        condition_styles = {
+            'prev_win_curr_win': {'color': 'darkgreen', 'linestyle': '-', 'marker': 'o'},
+            'prev_win_curr_loss': {'color': 'firebrick', 'linestyle': '-', 'marker': 's'},
+            'prev_loss_curr_win': {'color': 'mediumseagreen', 'linestyle': '-', 'marker': '^'},
+            'prev_loss_curr_loss': {'color': 'indianred', 'linestyle': '-', 'marker': 'D'}
+        }
+
+        # 1. Create plots for each time period (early, middle, late) - all conditions
+        for period in ['early', 'middle', 'late']:
+            if period not in time_period_data:
+                continue
+
+            plt.figure(figsize=(12, 7))
+
+            # Plot each condition for this time period
+            for condition, style in condition_styles.items():
+                if time_period_data[period][condition]['avg'] is not None:
+                    count = time_period_data[period][condition]['count']
+                    plt.fill_between(time_axis,
+                                     time_period_data[period][condition]['avg'] - time_period_data[period][condition][
+                                         'sem'],
+                                     time_period_data[period][condition]['avg'] + time_period_data[period][condition][
+                                         'sem'],
+                                     color=style['color'], alpha=0.3)
+                    plt.plot(time_axis, time_period_data[period][condition]['avg'],
+                            color=style['color'], linewidth=2,
+                            label=f"{condition.replace('prev_', '').replace('curr_', '-').replace('_', '').title()} (n={count})")
+
+            # Add vertical line at cue onset
+            plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+            plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+
+            # Labels and formatting
+            plt.xlabel('Time (s)', fontsize=16)
+            plt.ylabel('ΔF/F', fontsize=16)
+
+            # Count sessions in this period
+            num_sessions = len(time_periods[period]['sessions'])
+            plt.title(
+                f'{period.capitalize()} Sessions - Previous Outcome Effect: {subject_id} ({num_sessions} sessions)',
+                fontsize=20)
+
+            plt.xlim([-pre_cue_time, post_cue_time])
+            plt.legend(loc='upper right', fontsize=16)
+            plt.tight_layout()
+
+            # Save the figure
+            save_figure(plt.gcf(), subject_id, "pooled", f"previous_outcome_effect_{period}")
+            plt.show()
+
+        # 2. Create plots for each condition (across time periods)
+        for condition, style in condition_styles.items():
+            plt.figure(figsize=(12, 7))
+
+            # Plot this condition for each time period
+            for period, color in period_colors.items():
+                if period in time_period_data and time_period_data[period][condition]['avg'] is not None:
+                    count = time_period_data[period][condition]['count']
+                    plt.fill_between(time_axis,
+                                     time_period_data[period][condition]['avg'] - time_period_data[period][condition][
+                                         'sem'],
+                                     time_period_data[period][condition]['avg'] + time_period_data[period][condition][
+                                         'sem'],
+                                     color=color, alpha=0.3)
+                    plt.plot(time_axis, time_period_data[period][condition]['avg'],
+                             color=color, linewidth=2,
+                             label=f"{period.capitalize()} Sessions (n={count})")
+
+            # Add vertical line at cue onset
+            plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+            plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+
+            # Labels and formatting
+            plt.xlabel('Time (s)', fontsize=16)
+            plt.ylabel('ΔF/F', fontsize=16)
+
+            # Format condition name for title
+            condition_title = condition.replace('prev_', '').replace('curr_', '-').replace('_', '').title()
+            plt.title(f'Temporal Evolution of {condition_title}: {subject_id}', fontsize=20)
+
+            plt.xlim([-pre_cue_time, post_cue_time])
+            plt.legend(loc='upper right', fontsize=16)
+            plt.tight_layout()
+
+            # Save the figure
+            save_figure(plt.gcf(), subject_id, "pooled", f"previous_outcome_effect_evolution_{condition}")
+            plt.show()
+
+    # Return analysis results
+    result = {
+        'subject_id': subject_id,
+        'condition_data': condition_data,
+        'time_axis': time_axis,
+        'num_sessions': len(all_sessions),
+        'session_dates': session_dates
+    }
 
 
 def analyze_win_stay_lose_switch(subject_id, session_date=None, behavior_df=None):
