@@ -1333,11 +1333,23 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False,
     # Create the plot
     plt.figure(figsize=(12, 7))
     colors = ['blue', 'green', 'orange', 'red']
+    
+    # Track trial counts
+    trial_counts = {
+        'Q1': {'rewarded': 0, 'unrewarded': 0},
+        'Q2': {'rewarded': 0, 'unrewarded': 0},
+        'Q3': {'rewarded': 0, 'unrewarded': 0},
+        'Q4': {'rewarded': 0, 'unrewarded': 0}
+    }
 
     if win_loss:
         for quartile in range(4):
             quartile_rewarded = (quartile_bins == quartile) & (reward_outcomes == 1)
             quartile_unrewarded = (quartile_bins == quartile) & (reward_outcomes == 0)
+            
+            # Update trial counts
+            trial_counts[f'Q{quartile + 1}']['rewarded'] = np.sum(quartile_rewarded)
+            trial_counts[f'Q{quartile + 1}']['unrewarded'] = np.sum(quartile_unrewarded)
 
             if np.sum(quartile_rewarded) > 0:
                 rewarded_avg = np.mean(plotting_data[quartile_rewarded], axis=0)
@@ -1348,18 +1360,26 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False,
                                color=colors[quartile], alpha=0.3)
                 plt.plot(time_axis, rewarded_avg,
                         color=colors[quartile], linewidth=2,
-                        label=f'Quartile {quartile + 1} Rewarded (n={np.sum(quartile_rewarded)})')
+                        label=f'Q{quartile + 1}')
 
             if np.sum(quartile_unrewarded) > 0:
                 unrewarded_avg = np.mean(plotting_data[quartile_unrewarded], axis=0)
                 unrewarded_sem = calculate_sem(plotting_data[quartile_unrewarded], axis=0)
                 plt.plot(time_axis, unrewarded_avg,
                         color=colors[quartile], linewidth=2, linestyle='--',
-                        label=f'Quartile {quartile + 1} Unrewarded (n={np.sum(quartile_unrewarded)})')
+                        label=f'_Q{quartile + 1}')
     else:
         for quartile in range(4):
             quartile_trials = quartile_bins == quartile
-            if np.sum(quartile_trials) > 0:
+            trial_count = np.sum(quartile_trials)
+            
+            # Calculate rewarded and unrewarded counts for this quartile
+            rewarded_count = np.sum(quartile_trials & (reward_outcomes == 1))
+            unrewarded_count = np.sum(quartile_trials & (reward_outcomes == 0))
+            trial_counts[f'Q{quartile + 1}']['rewarded'] = rewarded_count
+            trial_counts[f'Q{quartile + 1}']['unrewarded'] = unrewarded_count
+            
+            if trial_count > 0:
                 quartile_avg = np.mean(plotting_data[quartile_trials], axis=0)
                 quartile_sem = calculate_sem(plotting_data[quartile_trials], axis=0)
 
@@ -1369,7 +1389,7 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False,
                                color=colors[quartile], alpha=0.3)
                 plt.plot(time_axis, quartile_avg,
                         color=colors[quartile], linewidth=2,
-                        label=f'Quartile {quartile + 1} (n={np.sum(quartile_trials)})')
+                        label=f'Q{quartile + 1}')
 
     plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
@@ -1377,13 +1397,60 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False,
     plt.ylabel('ΔF/F', fontsize=16)
     plt.title(plot_title, fontsize=20)
     plt.xlim([-pre_cue_time, post_cue_time])
-    plt.legend(loc='upper right', fontsize=16)
     
-    # Add text with quartile averages at the bottom of the plot
-    quartile_text = "Average reward rates: " + ", ".join([f"Q{q+1}: {avg:.4f}" for q, avg in enumerate(quartile_averages)])
-    plt.figtext(0.5, 0.01, quartile_text, ha='center', fontsize=16, bbox=dict(facecolor='white', alpha=0.8))
+    # Custom legend with integrated Low-High labels and arrow
+    if win_loss:
+        # Create a list of custom legend handles
+        legend_handles = []
+        
+        # First add solid/dashed line explanation
+        solid_line = plt.Line2D([0], [0], color='black', linewidth=2, label='Rewarded')
+        dashed_line = plt.Line2D([0], [0], color='black', linewidth=2, linestyle='--', label='Unrewarded')
+        legend_handles.extend([solid_line, dashed_line])
+        
+        # Add spacer
+        legend_handles.append(plt.Line2D([0], [0], color='none', label=''))
+        
+        # Create colored lines for quartiles with Low/High labels
+        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High'))
+        
+        # Create the legend with all handles
+        plt.legend(handles=legend_handles, loc='upper right', fontsize=12, 
+                 title="Reward Rate", title_fontsize=12)
+        
+        # Add trial counts as text on the left side below the figure
+        trial_count_text = "Trial counts:\n"
+        for q in range(4):
+            trial_count_text += f"Q{q+1}: {trial_counts[f'Q{q+1}']['rewarded']} rewarded, {trial_counts[f'Q{q+1}']['unrewarded']} unrewarded\n"
+        plt.figtext(0.25, 0.02, trial_count_text, ha='left', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+    else:
+        # Custom legend for non-win/loss plots
+        legend_handles = []
+        
+        # Create colored lines for quartiles with Low/High labels
+        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High'))
+        
+        # Create the legend
+        plt.legend(handles=legend_handles, loc='upper right', fontsize=12, 
+                 title="Reward Rate", title_fontsize=12)
+        
+        # Add trial counts as text on the left side below the figure
+        trial_count_text = "Trial counts:\n"
+        for q in range(4):
+            trial_count_text += f"Q{q+1}: {trial_counts[f'Q{q+1}']['rewarded']} rewarded, {trial_counts[f'Q{q+1}']['unrewarded']} unrewarded\n"
+        plt.figtext(0.25, 0.02, trial_count_text, ha='left', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+    
+    # Add text with quartile averages at the right side bottom of the plot
+    quartile_text = "Average reward rates:\n" + "\n".join([f"Q{q+1}: {avg:.3f}" for q, avg in enumerate(quartile_averages)])
+    plt.figtext(0.75, 0.02, quartile_text, ha='left', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
 
-    plt.tight_layout(rect=[0, 0.05, 1, 1])  # Make room for the text at the bottom
+    plt.tight_layout(rect=[0, 0.12, 1, 1])  # Make room for the text at the bottom
 
     # Save the figure
     fig_name = "reward_rate_quartiles"
@@ -1391,10 +1458,16 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False,
         save_figure(plt.gcf(), subject_id, "pooled", 
                 f"{fig_name}{'_pooled'}{'_winloss' if win_loss else ''}")
     else:
-        save_figure(plt.gcf(), subject_id, session_date, 
+        save_figure(plt.gcf(), subject_id, original_session_date, 
                 f"{fig_name}{'_winloss' if win_loss else ''}")
         
     plt.show()
+    
+    return {
+        'quartile_bins': quartile_bins,
+        'reward_rates': reward_rates,
+        'quartile_averages': quartile_averages
+    }
 
 def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=False, behavior_df=None):
     """
@@ -1597,12 +1670,25 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
 
     # Create the plot
     plt.figure(figsize=(12, 7))
-    colors = ['blue', 'green', 'orange', 'red']  # From lowest to highest confidence
+    # REVERSED color scheme compared to reward rate quartiles (red=Q1, blue=Q4)
+    colors = ['red', 'orange', 'green', 'blue']  # From lowest to highest confidence
+    
+    # Track trial counts
+    trial_counts = {
+        'Q1': {'rewarded': 0, 'unrewarded': 0},
+        'Q2': {'rewarded': 0, 'unrewarded': 0},
+        'Q3': {'rewarded': 0, 'unrewarded': 0},
+        'Q4': {'rewarded': 0, 'unrewarded': 0}
+    }
 
     if win_loss:
         for quartile in range(4):
             quartile_rewarded = (quartile_bins == quartile) & (reward_outcomes == 1)
             quartile_unrewarded = (quartile_bins == quartile) & (reward_outcomes == 0)
+            
+            # Update trial counts
+            trial_counts[f'Q{quartile + 1}']['rewarded'] = np.sum(quartile_rewarded)
+            trial_counts[f'Q{quartile + 1}']['unrewarded'] = np.sum(quartile_unrewarded)
 
             if np.sum(quartile_rewarded) > 0:
                 rewarded_avg = np.mean(plotting_data[quartile_rewarded], axis=0)
@@ -1613,18 +1699,26 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
                                  color=colors[quartile], alpha=0.3)
                 plt.plot(time_axis, rewarded_avg,
                          color=colors[quartile], linewidth=2,
-                         label=f'Quartile {quartile + 1} Rewarded (n={np.sum(quartile_rewarded)})')
+                         label=f'Q{quartile + 1}')
 
             if np.sum(quartile_unrewarded) > 0:
                 unrewarded_avg = np.mean(plotting_data[quartile_unrewarded], axis=0)
                 unrewarded_sem = calculate_sem(plotting_data[quartile_unrewarded], axis=0)
                 plt.plot(time_axis, unrewarded_avg,
                          color=colors[quartile], linewidth=2, linestyle='--',
-                         label=f'Quartile {quartile + 1} Unrewarded (n={np.sum(quartile_unrewarded)})')
+                         label=f'_Q{quartile + 1}')
     else:
         for quartile in range(4):
             quartile_trials = quartile_bins == quartile
-            if np.sum(quartile_trials) > 0:
+            trial_count = np.sum(quartile_trials)
+            
+            # Calculate rewarded and unrewarded counts for this quartile
+            rewarded_count = np.sum(quartile_trials & (reward_outcomes == 1))
+            unrewarded_count = np.sum(quartile_trials & (reward_outcomes == 0))
+            trial_counts[f'Q{quartile + 1}']['rewarded'] = rewarded_count
+            trial_counts[f'Q{quartile + 1}']['unrewarded'] = unrewarded_count
+            
+            if trial_count > 0:
                 quartile_avg = np.mean(plotting_data[quartile_trials], axis=0)
                 quartile_sem = calculate_sem(plotting_data[quartile_trials], axis=0)
 
@@ -1634,7 +1728,7 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
                                  color=colors[quartile], alpha=0.3)
                 plt.plot(time_axis, quartile_avg,
                          color=colors[quartile], linewidth=2,
-                         label=f'Quartile {quartile + 1} (n={np.sum(quartile_trials)})')
+                         label=f'Q{quartile + 1}')
 
     plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
@@ -1642,13 +1736,60 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
     plt.ylabel('ΔF/F', fontsize=12)
     plt.title(plot_title, fontsize=14)
     plt.xlim([-pre_cue_time, post_cue_time])
-    plt.legend(loc='upper right')
     
-    # Add text with quartile averages at the bottom of the plot
-    quartile_text = "Average confidence values: " + ", ".join([f"Q{q+1}: {avg:.4f}" for q, avg in enumerate(quartile_averages)])
-    plt.figtext(0.5, 0.01, quartile_text, ha='center', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+    # Custom legend with integrated Low-High labels and arrow
+    if win_loss:
+        # Create a list of custom legend handles
+        legend_handles = []
+        
+        # First add solid/dashed line explanation
+        solid_line = plt.Line2D([0], [0], color='black', linewidth=2, label='Rewarded')
+        dashed_line = plt.Line2D([0], [0], color='black', linewidth=2, linestyle='--', label='Unrewarded')
+        legend_handles.extend([solid_line, dashed_line])
+        
+        # Add spacer
+        legend_handles.append(plt.Line2D([0], [0], color='none', label=''))
+        
+        # Create colored lines for quartiles with Low/High labels - REVERSED order for computer confidence
+        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High'))
+        
+        # Create the legend with all handles
+        plt.legend(handles=legend_handles, loc='upper right', fontsize=12,
+                  title="Computer Confidence", title_fontsize=12)
+        
+        # Add trial counts as text on the left side below the figure
+        trial_count_text = "Trial counts:\n"
+        for q in range(4):
+            trial_count_text += f"Q{q+1}: {trial_counts[f'Q{q+1}']['rewarded']} rewarded, {trial_counts[f'Q{q+1}']['unrewarded']} unrewarded\n"
+        plt.figtext(0.25, 0.02, trial_count_text, ha='left', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+    else:
+        # For non-win/loss plots, similar legend without the solid/dashed explanation
+        legend_handles = []
+        
+        # Create colored lines for quartiles with Low/High labels - REVERSED order
+        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High'))
+        
+        # Create the legend
+        plt.legend(handles=legend_handles, loc='upper right', fontsize=12,
+                  title="Computer Confidence", title_fontsize=12)
+        
+        # Add trial counts as text on the left side below the figure
+        trial_count_text = "Trial counts:\n"
+        for q in range(4):
+            trial_count_text += f"Q{q+1}: {trial_counts[f'Q{q+1}']['rewarded']} rewarded, {trial_counts[f'Q{q+1}']['unrewarded']} unrewarded\n"
+        plt.figtext(0.25, 0.02, trial_count_text, ha='left', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+    
+    # Add text with quartile averages at the right side bottom of the plot
+    quartile_text = "Average confidence values:\n" + "\n".join([f"Q{q+1}: {avg:.4f}" for q, avg in enumerate(quartile_averages)])
+    plt.figtext(0.75, 0.02, quartile_text, ha='left', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
 
-    plt.tight_layout(rect=[0, 0.05, 1, 1])  # Make room for the text at the bottom
+    plt.tight_layout(rect=[0, 0.12, 1, 1])  # Make room for the text at the bottom
 
     # Save the figure
     fig_name = "computer_confidence_quartiles"
@@ -1656,7 +1797,7 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
         save_figure(plt.gcf(), subject_id, "pooled",
                 f"{fig_name}{'_pooled'}{'_winloss' if win_loss else ''}")
     else:
-        save_figure(plt.gcf(), subject_id, session_date,
+        save_figure(plt.gcf(), subject_id, original_session_date,
                 f"{fig_name}{'_winloss' if win_loss else ''}")
 
     plt.show()
