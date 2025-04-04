@@ -453,12 +453,13 @@ def save_pooled_results(result, subject_id, win_loss=False):
     except Exception as e:
         print(f"Error saving pooled results: {e}")
 
-def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=None, show_session_traces=False, behavior_df=None):
-    """Analyze and visualize pooled data for a subject"""
-    # Create figure if not provided
-    plt.style.use('default')
 
-    if fig is None:
+def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=None, show_session_traces=False, behavior_df=None, suppress_plotting=False):
+    """Analyze and visualize pooled data for a subject"""
+    # Create figure if not provided and not suppressing plotting
+    plt.style.use('default')
+    
+    if fig is None and not suppress_plotting:
         fig = plt.figure(figsize=(12, 7))
 
     # Check for saved pooled results
@@ -467,96 +468,98 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
         if saved_results is not None:
             print(f"Using saved results for {subject_id}")
             
-            # Create a visualization with saved data
-            # This way, we can control show_session_traces without recomputing
-            time_axis = saved_results['time_axis']
-            
-            # Create a new figure for the visualization
-            plt.figure(figsize=(12, 7))
-            
-            # Optionally plot session traces
-            if show_session_traces and 'session_averages' in saved_results:
-                blue_colors = plt.cm.Blues(np.linspace(0.3, 1, len(saved_results['session_dates'])))
-                for idx, (session_date, session_avg) in enumerate(zip(saved_results['session_dates'], saved_results['session_averages'])):
-                    plt.plot(time_axis, session_avg,
-                            alpha=0.6, linewidth=1, linestyle='-',
-                            color=blue_colors[idx],
-                            label=f"Session {session_date}")
-            
-            # Plot the main data (win/loss or average)
-            if win_loss:
-                if saved_results['rewarded_avg'] is not None:
-                    plt.fill_between(time_axis, 
-                                   saved_results['rewarded_avg'] - saved_results['rewarded_sem'],  
-                                   saved_results['rewarded_avg'] + saved_results['rewarded_sem'],  
-                                   color='lightgreen', alpha=0.4, label='Rewarded ± SEM')  
-                    plt.plot(time_axis, saved_results['rewarded_avg'], 
-                           color='green', linewidth=2.5, label='Rewarded Avg')
-
-                if saved_results['unrewarded_avg'] is not None:
-                    plt.fill_between(time_axis, 
-                                   saved_results['unrewarded_avg'] - saved_results['unrewarded_sem'],  
-                                   saved_results['unrewarded_avg'] + saved_results['unrewarded_sem'],  
-                                   color='lightsalmon', alpha=0.4, label='Unrewarded ± SEM')  
-                    plt.plot(time_axis, saved_results['unrewarded_avg'], 
-                           color='darkorange', linewidth=2.5, label='Unrewarded Avg')
-            else:
-                plt.fill_between(time_axis,
-                               saved_results['pooled_average'] - saved_results['pooled_sem'],  
-                               saved_results['pooled_average'] + saved_results['pooled_sem'],  
-                               color='lightgreen', alpha=0.4,
-                               label='Mean ± SEM')  
-                plt.plot(time_axis, saved_results['pooled_average'], 
-                       color='green', linewidth=2.5, label='Overall Avg')
-            
-            # Add vertical line at cue onset
-            plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
-            plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
-            
-            # Labels and formatting
-            plt.xlabel('Time (s)', fontsize=16)
-            plt.ylabel('ΔF/F', fontsize=16)
-            plt.title(f'Pooled Photometry Response: {subject_id} ({len(saved_results["session_dates"])} sessions)', fontsize=14)
-            plt.xlim([-pre_cue_time, post_cue_time])
-            
-            # Fix the legend - limit session traces if too many
-            if show_session_traces and 'session_dates' in saved_results and len(saved_results['session_dates']) > 5:
-                handles, labels = plt.gca().get_legend_handles_labels()
-                # Find how many session labels we have
-                session_handles = [h for h, l in zip(handles, labels) if l.startswith("Session")]
-                non_session_handles = [h for h, l in zip(handles, labels) if not l.startswith("Session")]
-                session_labels = [l for l in labels if l.startswith("Session")]
-                non_session_labels = [l for l in labels if not l.startswith("Session")]
+            # Only create visualization if not suppressing plotting
+            if not suppress_plotting:
+                # This way, we can control show_session_traces without recomputing
+                time_axis = saved_results['time_axis']
                 
-                # Only keep the first 5 session labels
-                limited_session_handles = session_handles[:5]
-                limited_session_labels = session_labels[:5]
-
-                # Show limited legend
-                plt.legend(limited_session_handles + non_session_handles, 
-                          limited_session_labels + non_session_labels, 
-                          loc='upper right', fontsize=10)
-            else:
-                plt.legend(loc='upper right', fontsize=10)
+                # Create a new figure for the visualization
+                plt.figure(figsize=(12, 7))
                 
-            # Add grid explicitly before other elements
-            plt.grid(True, alpha=0.3)  # Make sure this comes before tight_layout
+                # Optionally plot session traces
+                if show_session_traces and 'session_averages' in saved_results:
+                    blue_colors = plt.cm.Blues(np.linspace(0.3, 1, len(saved_results['session_dates'])))
+                    for idx, (session_date, session_avg) in enumerate(zip(saved_results['session_dates'], saved_results['session_averages'])):
+                        plt.plot(time_axis, session_avg,
+                                alpha=0.6, linewidth=1, linestyle='-',
+                                color=blue_colors[idx],
+                                label=f"Session {session_date}")
+                
+                # Plot the main data (win/loss or average)
+                if win_loss:
+                    if saved_results['rewarded_avg'] is not None:
+                        plt.fill_between(time_axis, 
+                                       saved_results['rewarded_avg'] - saved_results['rewarded_sem'],  
+                                       saved_results['rewarded_avg'] + saved_results['rewarded_sem'],  
+                                       color='lightgreen', alpha=0.4, label='Rewarded ± SEM')  
+                        plt.plot(time_axis, saved_results['rewarded_avg'], 
+                               color='green', linewidth=2.5, label='Rewarded Avg')
 
-            # Add statistics - count only non-'M' trials
-            total_trials = saved_results['total_trials']
-            stats_text = (f"Total Sessions: {len(saved_results['session_dates'])}\n"
-                        f"Total Trials: {total_trials} (excluding 'M' choices)\n"
-                        f"Peak: {np.max(saved_results['pooled_average']):.4f}\n"
-                        f"Baseline: {np.mean(saved_results['pooled_average'][:pre_cue_samples]):.4f}")
-            plt.text(-pre_cue_time + 0.2, saved_results['pooled_average'].max() * 1.2, stats_text,
-                bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
-            
-            plt.tight_layout()
-            # Save the figure with appropriate suffix
-            trace_suffix = "_with_sessions" if show_session_traces else ""
-            save_figure(plt.gcf(), subject_id, "pooled", f"pooled_results{trace_suffix}{'_winloss' if win_loss else ''}")
-            
-            plt.show()
+                    if saved_results['unrewarded_avg'] is not None:
+                        plt.fill_between(time_axis, 
+                                       saved_results['unrewarded_avg'] - saved_results['unrewarded_sem'],  
+                                       saved_results['unrewarded_avg'] + saved_results['unrewarded_sem'],  
+                                       color='lightsalmon', alpha=0.4, label='Unrewarded ± SEM')  
+                        plt.plot(time_axis, saved_results['unrewarded_avg'], 
+                               color='darkorange', linewidth=2.5, label='Unrewarded Avg')
+                else:
+                    plt.fill_between(time_axis,
+                                   saved_results['pooled_average'] - saved_results['pooled_sem'],  
+                                   saved_results['pooled_average'] + saved_results['pooled_sem'],  
+                                   color='lightgreen', alpha=0.4,
+                                   label='Mean ± SEM')  
+                    plt.plot(time_axis, saved_results['pooled_average'], 
+                           color='green', linewidth=2.5, label='Overall Avg')
+                
+                # Add vertical line at cue onset
+                plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+                plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+                
+                # Labels and formatting
+                plt.xlabel('Time (s)', fontsize=16)
+                plt.ylabel('ΔF/F', fontsize=16)
+                plt.title(f'Pooled Photometry Response: {subject_id} ({len(saved_results["session_dates"])} sessions)', fontsize=14)
+                plt.xlim([-pre_cue_time, post_cue_time])
+                
+                # Fix the legend - limit session traces if too many
+                if show_session_traces and 'session_dates' in saved_results and len(saved_results['session_dates']) > 5:
+                    handles, labels = plt.gca().get_legend_handles_labels()
+                    # Find how many session labels we have
+                    session_handles = [h for h, l in zip(handles, labels) if l.startswith("Session")]
+                    non_session_handles = [h for h, l in zip(handles, labels) if not l.startswith("Session")]
+                    session_labels = [l for l in labels if l.startswith("Session")]
+                    non_session_labels = [l for l in labels if not l.startswith("Session")]
+                    
+                    # Only keep the first 5 session labels
+                    limited_session_handles = session_handles[:5]
+                    limited_session_labels = session_labels[:5]
+
+                    # Show limited legend
+                    plt.legend(limited_session_handles + non_session_handles, 
+                              limited_session_labels + non_session_labels, 
+                              loc='upper right', fontsize=10)
+                else:
+                    plt.legend(loc='upper right', fontsize=10)
+                    
+                # Add grid explicitly before other elements
+                plt.grid(True, alpha=0.3)  # Make sure this comes before tight_layout
+
+                # Add statistics - count only non-'M' trials
+                total_trials = saved_results['total_trials']
+                stats_text = (f"Total Sessions: {len(saved_results['session_dates'])}\n"
+                            f"Total Trials: {total_trials} (excluding 'M' choices)\n"
+                            f"Peak: {np.max(saved_results['pooled_average']):.4f}\n"
+                            f"Baseline: {np.mean(saved_results['pooled_average'][:pre_cue_samples]):.4f}")
+                plt.text(-pre_cue_time + 0.2, saved_results['pooled_average'].max() * 1.2, stats_text,
+                    bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
+                
+                plt.tight_layout()
+                # Save the figure with appropriate suffix
+                trace_suffix = "_with_sessions" if show_session_traces else ""
+                save_figure(plt.gcf(), subject_id, "pooled", f"pooled_results{trace_suffix}{'_winloss' if win_loss else ''}")
+                
+                plt.show()
+                
             return saved_results
 
     # Find all session directories for this subject
@@ -621,17 +624,16 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
     # Concatenate all trials from all sessions
     pooled_data = np.vstack(all_plotting_data)
     pooled_average = np.mean(pooled_data, axis=0)
-    time_axis = all_sessions[0]['time_axis']  
-
-    # Create the pooled plot
-    plt.figure(figsize=(12, 7))
+    time_axis = all_sessions[0]['time_axis']
 
     rewarded_avg = None
     unrewarded_avg = None
-    rewarded_data = []
-    unrewarded_data = []
+    rewarded_data = np.array([])
+    unrewarded_data = np.array([])
 
     if win_loss:
+        rewarded_data = []
+        unrewarded_data = []
         for session in all_sessions:
             non_m_indices = np.array(
                 [i for i, idx in enumerate(session["valid_trials"]) if idx in session["non_m_trials"]])
@@ -649,76 +651,95 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
                     unrewarded_data.append(session_unrewarded)
 
         # Filter out empty arrays before stacking
-        rewarded_data = np.vstack(rewarded_data) if rewarded_data else np.array([])
-        unrewarded_data = np.vstack(unrewarded_data) if unrewarded_data else np.array([])
+        if rewarded_data:
+            rewarded_data = np.vstack(rewarded_data)
+        if unrewarded_data:
+            unrewarded_data = np.vstack(unrewarded_data)
 
-        # Compute averages and std deviations
-        if rewarded_data.size > 0:
-            rewarded_avg = np.mean(rewarded_data, axis=0)
-            rewarded_sem = calculate_sem(rewarded_data, axis=0)  
-            plt.fill_between(time_axis, 
-                             rewarded_avg - rewarded_sem,  
-                             rewarded_avg + rewarded_sem,  
-                             color='lightgreen', alpha=0.4, label='Rewarded ± SEM')  
-            plt.plot(time_axis, rewarded_avg, color='green', linewidth=2.5, label='Rewarded Avg')
+    # Only create plots if not suppressing visualization
+    if not suppress_plotting:
+        # Create the pooled plot
+        plt.figure(figsize=(12, 7))
+        
+        # Plot reward outcomes or average data
+        if win_loss:
+            # Compute averages and std deviations
+            if rewarded_data.size > 0:
+                rewarded_avg = np.mean(rewarded_data, axis=0)
+                rewarded_sem = calculate_sem(rewarded_data, axis=0)  
+                plt.fill_between(time_axis, 
+                                 rewarded_avg - rewarded_sem,  
+                                 rewarded_avg + rewarded_sem,  
+                                 color='lightgreen', alpha=0.4, label='Rewarded ± SEM')  
+                plt.plot(time_axis, rewarded_avg, color='green', linewidth=2.5, label='Rewarded Avg')
 
-        if unrewarded_data.size > 0:
-            unrewarded_avg = np.mean(unrewarded_data, axis=0)
-            unrewarded_sem = calculate_sem(unrewarded_data, axis=0) 
-            plt.fill_between(time_axis, 
-                             unrewarded_avg - unrewarded_sem,  
-                             unrewarded_avg + unrewarded_sem,  
-                             color='lightsalmon', alpha=0.4, label='Unrewarded ± SEM')  
-            plt.plot(time_axis, unrewarded_avg, color='darkorange', linewidth=2.5, label='Unrewarded Avg')
+            if unrewarded_data.size > 0:
+                unrewarded_avg = np.mean(unrewarded_data, axis=0)
+                unrewarded_sem = calculate_sem(unrewarded_data, axis=0) 
+                plt.fill_between(time_axis, 
+                                 unrewarded_avg - unrewarded_sem,  
+                                 unrewarded_avg + unrewarded_sem,  
+                                 color='lightsalmon', alpha=0.4, label='Unrewarded ± SEM')  
+                plt.plot(time_axis, unrewarded_avg, color='darkorange', linewidth=2.5, label='Unrewarded Avg')
+        else:
+            pooled_sem = calculate_sem(pooled_data, axis=0)  
+            plt.fill_between(time_axis,
+                             pooled_average - pooled_sem,  
+                             pooled_average + pooled_sem,  
+                             color='lightgreen', alpha=0.4,
+                             label='Mean ± SEM')  
+            plt.plot(time_axis, pooled_average, color='green', linewidth=2.5, label='Overall Avg')
 
-    else:
-        pooled_sem = calculate_sem(pooled_data, axis=0)  
-        plt.fill_between(time_axis,
-                         pooled_average - pooled_sem,  
-                         pooled_average + pooled_sem,  
-                         color='lightgreen', alpha=0.4,
-                         label='Mean ± SEM')  
-        plt.plot(time_axis, pooled_average, color='green', linewidth=2.5, label='Overall Avg')
+        # Add session traces if requested
+        if show_session_traces:
+            # Plot individual session averages with blue gradient
+            for idx, (session_date, session_avg) in enumerate(zip(session_dates, session_averages)):
+                plt.plot(time_axis, session_avg,
+                         alpha=0.6, linewidth=1, linestyle='-',
+                         color=blue_colors[idx],  # Use blue gradient
+                         label=f"Session {session_date}")
+                
+        # Add a vertical line at the cue onset (time=0)
+        plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+        plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
 
-    if show_session_traces:
-        # Plot individual session averages with blue gradient
-        for idx, (session_date, session_avg) in enumerate(zip(session_dates, session_averages)):
-            plt.plot(time_axis, session_avg,
-                     alpha=0.6, linewidth=1, linestyle='-',
-                     color=blue_colors[idx],  # Use blue gradient
-                     label=f"Session {session_date}")
-            
-    # Add a vertical line at the cue onset (time=0)
-    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
-    plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        # Labels and formatting
+        plt.xlabel('Time (s)', fontsize=16)
+        plt.ylabel('ΔF/F', fontsize=16)
+        plt.title(f'Pooled Photometry Response: {subject_id} ({len(all_sessions)} sessions)', fontsize=20)
+        plt.xlim([-pre_cue_time, post_cue_time])
 
-    # Labels and formatting
-    plt.xlabel('Time (s)', fontsize=16)
-    plt.ylabel('ΔF/F', fontsize=16)
-    plt.title(f'Pooled Photometry Response: {subject_id} ({len(all_sessions)} sessions)', fontsize=20)
-    plt.xlim([-pre_cue_time, post_cue_time])
+        # Limit legend items if too many sessions
+        if len(all_sessions) > 5:
+            handles, labels = plt.gca().get_legend_handles_labels()
+            limited_handles = handles[:8]
+            limited_labels = labels[:8]
+            plt.legend(limited_handles, limited_labels, loc='upper right', fontsize=16)
+        else:
+            plt.legend(loc='upper right', fontsize=16)
 
-    # Limit legend items if too many sessions
-    if len(all_sessions) > 5:
-        handles, labels = plt.gca().get_legend_handles_labels()
-        limited_handles = handles[:8]
-        limited_labels = labels[:8]
-        plt.legend(limited_handles, limited_labels, loc='upper right', fontsize=16)
-    else:
-        plt.legend(loc='upper right', fontsize=16)
+        plt.tight_layout()
 
-    plt.tight_layout()
+        # Add statistics - count only non-'M' trials
+        total_trials = sum(len(session['non_m_trials']) for session in all_sessions)
+        stats_text = (f"Total Sessions: {len(all_sessions)}\n"
+                      f"Total Trials: {total_trials} (excluding 'M' choices)\n"
+                      f"Peak: {np.max(pooled_average):.4f}\n"
+                      f"Baseline: {np.mean(pooled_average[:pre_cue_samples]):.4f}")
+        plt.text(-pre_cue_time + 0.2, pooled_average.max() * 1.2, stats_text,
+                 bbox=dict(facecolor='white', alpha=0.7))
 
-    # Add statistics - count only non-'M' trials
-    total_trials = sum(len(session['non_m_trials']) for session in all_sessions)
-    stats_text = (f"Total Sessions: {len(all_sessions)}\n"
-                  f"Total Trials: {total_trials} (excluding 'M' choices)\n"
-                  f"Peak: {np.max(pooled_average):.4f}\n"
-                  f"Baseline: {np.mean(pooled_average[:pre_cue_samples]):.4f}")
-    plt.text(-pre_cue_time + 0.2, pooled_average.max() * 1.2, stats_text,
-             bbox=dict(facecolor='white', alpha=0.7))
+        # Save the figure
+        trace_suffix = "_with_sessions" if show_session_traces else ""
+        save_figure(plt.gcf(), subject_id, "pooled", f"pooled_results{trace_suffix}{'_winloss' if win_loss else ''}")
 
-    # Prepare pooled result
+        plt.show()
+
+    # Calculate SEMs for the return value
+    rewarded_sem = calculate_sem(rewarded_data, axis=0) if rewarded_data.size > 0 else None
+    unrewarded_sem = calculate_sem(unrewarded_data, axis=0) if unrewarded_data.size > 0 else None
+    
+    # Always prepare pooled result regardless of plotting
     pooled_result = {
         'code_version': CODE_VERSION,
         'subject_id': subject_id,
@@ -727,23 +748,16 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
         'pooled_average': pooled_average,
         'pooled_sem': calculate_sem(pooled_data, axis=0),  
         'time_axis': time_axis,
-        'total_trials': total_trials,
+        'total_trials': sum(len(session['non_m_trials']) for session in all_sessions),
         'session_averages': session_averages,
-        'rewarded_avg': rewarded_avg,
-        'rewarded_sem': calculate_sem(rewarded_data, axis=0) if rewarded_data.size > 0 else None, 
-        'unrewarded_avg': unrewarded_avg,
-        'unrewarded_sem': calculate_sem(unrewarded_data, axis=0) if unrewarded_data.size > 0 else None 
+        'rewarded_avg': np.mean(rewarded_data, axis=0) if rewarded_data.size > 0 else None,
+        'rewarded_sem': rewarded_sem,
+        'unrewarded_avg': np.mean(unrewarded_data, axis=0) if unrewarded_data.size > 0 else None,
+        'unrewarded_sem': unrewarded_sem
     }
 
     # Save pooled results
     save_pooled_results(pooled_result, subject_id, win_loss)
-
-    # Save the figure
-    trace_suffix = "_with_sessions" if show_session_traces else ""
-    save_figure(plt.gcf(), subject_id, "pooled", f"pooled_results{trace_suffix}{'_winloss' if win_loss else ''}")
-
-    plt.show()
-    return pooled_result
 
 
 def analyze_all_subjects(win_loss=False, force_recompute=False):
@@ -856,10 +870,121 @@ def analyze_specific_session(subject_id, session_date, show_heatmap=False, win_l
     return None
 
 
-def pooled_results(subject_id, win_loss=False, force_recompute=False, show_session_traces=False, behavior_df=None):
-    """Analyze and visualize pooled results for a subject"""
-    print(f"Analyzing pooled results for subject {subject_id}...")
-    return analyze_pooled_data(subject_id, win_loss=win_loss, force_recompute=force_recompute,
+def pooled_results(subject_id="All", win_loss=False, force_recompute=False, show_session_traces=False, behavior_df=None, specific_subjects=None):
+    """Analyze and visualize pooled results for a subject or across all subjects"""
+    
+    # Handle all-subject analysis
+    if subject_id == "All":
+        if specific_subjects is None:
+            # Default list of subjects if not specified
+            specific_subjects = ["JOA-M-0022", "JOA-M-0023", "JOA-M-0024", "JOA-M-0025", "JOA-M-0026"]
+            print(f"Using default subject list: {specific_subjects}")
+        
+        # Store individual subject averages
+        all_subject_averages = []
+        all_subject_sem = []
+        time_axis = None
+        total_sessions = 0
+        
+        # Process each subject individually
+        for subj in specific_subjects:
+            print(f"Processing subject {subj} for cross-subject averaging...")
+            result = analyze_pooled_data(subj, win_loss=win_loss, force_recompute=force_recompute, 
+                               show_session_traces=False, behavior_df=behavior_df, 
+                               suppress_plotting=True) 
+            
+            if result:
+                if time_axis is None:
+                    time_axis = result['time_axis']
+                
+                if win_loss:
+                    # For win-loss analysis, store both rewarded and unrewarded data
+                    if result['rewarded_avg'] is not None:
+                        all_subject_averages.append({"type": "rewarded", "data": result['rewarded_avg']})
+                        all_subject_sem.append({"type": "rewarded", "data": result['rewarded_sem']})
+                    
+                    if result['unrewarded_avg'] is not None:
+                        all_subject_averages.append({"type": "unrewarded", "data": result['unrewarded_avg']})
+                        all_subject_sem.append({"type": "unrewarded", "data": result['unrewarded_sem']})
+                else:
+                    # For regular analysis, just store the pooled average
+                    all_subject_averages.append({"type": "average", "data": result['pooled_average']})
+                    all_subject_sem.append({"type": "average", "data": result['pooled_sem']})
+                
+                total_sessions += len(result['session_dates'])
+        
+        # Check if we have data to plot
+        if not all_subject_averages:
+            print("No valid data found for cross-subject averaging")
+            return None
+        
+        # Create figure for cross-subject analysis
+        plt.figure(figsize=(12, 7))
+        
+        if win_loss:
+            # Separate rewarded and unrewarded data
+            rewarded_averages = [item["data"] for item in all_subject_averages if item["type"] == "rewarded"]
+            unrewarded_averages = [item["data"] for item in all_subject_averages if item["type"] == "unrewarded"]
+            
+            if rewarded_averages:
+                # Calculate mean and SEM across subjects for rewarded trials
+                rewarded_mean = np.mean(rewarded_averages, axis=0)
+                rewarded_sem = np.std(rewarded_averages, axis=0) / np.sqrt(len(rewarded_averages))
+                
+                plt.fill_between(time_axis, 
+                               rewarded_mean - rewarded_sem,  
+                               rewarded_mean + rewarded_sem,  
+                               color='lightgreen', alpha=0.4, 
+                               label=f'_Rewarded ± SEM (n={len(rewarded_averages)} subjects)')  
+                plt.plot(time_axis, rewarded_mean, color='green', linewidth=2.5, label=f'Rewarded Avg (n={len(rewarded_averages)} subjects)')
+            
+            if unrewarded_averages:
+                # Calculate mean and SEM across subjects for unrewarded trials
+                unrewarded_mean = np.mean(unrewarded_averages, axis=0)
+                unrewarded_sem = np.std(unrewarded_averages, axis=0) / np.sqrt(len(unrewarded_averages))
+                
+                plt.fill_between(time_axis, 
+                               unrewarded_mean - unrewarded_sem,  
+                               unrewarded_mean + unrewarded_sem,  
+                               color='lightsalmon', alpha=0.4, 
+                               label=f'_Unrewarded ± SEM (n={len(unrewarded_averages)} subjects)')  
+                plt.plot(time_axis, unrewarded_mean, color='darkorange', linewidth=2.5, label=f'Unrewarded Avg (n={len(unrewarded_averages)} subjects)')
+        else:
+            # Get all average data
+            all_averages = [item["data"] for item in all_subject_averages if item["type"] == "average"]
+            
+            # Calculate mean and SEM across subjects
+            across_subject_mean = np.mean(all_averages, axis=0)
+            across_subject_sem = np.std(all_averages, axis=0) / np.sqrt(len(all_averages))
+            
+            plt.fill_between(time_axis,
+                           across_subject_mean - across_subject_sem,  
+                           across_subject_mean + across_subject_sem,  
+                           color='lightgreen', alpha=0.4,
+                           label=f'Mean ± SEM (n={len(specific_subjects)} subjects)')  
+            plt.plot(time_axis, across_subject_mean, color='green', linewidth=2.5, label='Overall Avg')
+        
+        # Add vertical line at cue onset
+        plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+        plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        
+        # Labels and formatting
+        plt.xlabel('Time (s)', fontsize=16)
+        plt.ylabel('ΔF/F', fontsize=16)
+        plt.title(f'Pooled Photometry Response: All Subjects (n={len(specific_subjects)})', fontsize=20)
+        plt.xlim([-pre_cue_time, post_cue_time])
+        plt.legend(loc='upper right', fontsize=16)
+        plt.tight_layout()
+        
+        # Save the figure
+        save_figure(plt.gcf(), "all_subjects", "pooled", f"pooled_results{'_winloss' if win_loss else ''}")
+        
+        plt.show()
+
+    else:
+        # Original single-subject behavior
+        print(f"Analyzing pooled results for subject {subject_id}...")
+        return analyze_pooled_data(subject_id, win_loss=win_loss, force_recompute=force_recompute,
                                show_session_traces=show_session_traces, behavior_df=behavior_df)
 
 
@@ -1192,7 +1317,281 @@ def analyze_group_computer_confidence(behavior_df=None, min_trials=100, save_fig
     plt.show()
 
 
-def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False, behavior_df=None):
+def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False, behavior_df=None, specific_subjects=None):
+    """
+    Analyze photometry signals binned by reward rate quartiles for a single subject or across subjects
+    
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject, or "All" for cross-subject analysis
+    session_date : str, optional
+        Specific session to analyze. If None, analyze all sessions.
+    win_loss : bool, optional
+        Whether to split by rewarded/unrewarded trials
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from parquet
+    specific_subjects : list, optional
+        List of subject IDs to include if subject_id="All"
+        
+    Returns:
+    --------
+    dict: Analysis results including quartile bins and signal data
+    """
+    # Handle cross-subject analysis
+    if subject_id == "All":
+        if specific_subjects is None:
+            # Default list of subjects
+            specific_subjects = ["JOA-M-0022", "JOA-M-0023", "JOA-M-0024", "JOA-M-0025", "JOA-M-0026"]
+            print(f"Using default subject list: {specific_subjects}")
+        
+        # Store data for each quartile across subjects
+        quartile_data = {
+            0: {'rewarded': [], 'unrewarded': [], 'all': []},
+            1: {'rewarded': [], 'unrewarded': [], 'all': []},
+            2: {'rewarded': [], 'unrewarded': [], 'all': []},
+            3: {'rewarded': [], 'unrewarded': [], 'all': []}
+        }
+        
+        # Track quartile averages by subject for overall statistics
+        subject_quartile_avgs = []
+        time_axis = None
+        
+        # Process each subject individually
+        for subj in specific_subjects:
+            print(f"Processing subject {subj} for reward rate quartile analysis...")
+            
+            # Call the single subject analysis function for each subject
+            # We'll collect the individual results for later averaging
+            subj_result = analyze_reward_rate_quartiles_single(subj, session_date, win_loss, behavior_df)
+            
+            if subj_result and 'quartile_bins' in subj_result and 'reward_rates' in subj_result:
+                # Extract the quartile bins and reward rates from this subject
+                quartile_bins = subj_result['quartile_bins']
+                reward_rates = subj_result['reward_rates']
+                quartile_avgs = subj_result['quartile_averages']
+                
+                # Store quartile averages for this subject
+                subject_quartile_avgs.append(quartile_avgs)
+                
+                # Get subject-specific quartile data
+                # We need to re-process the subject to get the photometry signals by quartile
+                # (since the original function doesn't return these directly)
+                subject_path = os.path.join(base_dir, subj)
+                
+                # Re-run the necessary parts of the analysis to get the photometry signals
+                # This is similar to logic in analyze_reward_rate_quartiles_single
+                all_plotting_data = []
+                all_reward_rates = []
+                all_reward_outcomes = []
+                
+                # Get all sessions for this subject
+                matching_pennies_sessions = set()
+                try:
+                    if behavior_df is not None:
+                        subject_data = behavior_df[behavior_df['subjid'] == subj]
+                        matching_pennies_sessions = set(subject_data['date'].unique())
+                    else:
+                        df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+                        df['date'] = df['date'].astype(str)
+                        subject_data = df[(df['subjid'] == subj) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+                        matching_pennies_sessions = set(subject_data['date'].unique())
+                except Exception as e:
+                    print(f"Warning: Could not load session info for {subj}: {e}")
+                    continue
+
+                sessions = sorted([d for d in os.listdir(subject_path)
+                        if os.path.isdir(os.path.join(subject_path, d)) and
+                        os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                        d in matching_pennies_sessions])
+                
+                # Process each session separately to get photometry data
+                for sess_date in sessions:
+                    session_result = process_session(subj, sess_date, behavior_df=behavior_df)
+                    if not session_result:
+                        continue
+
+                    if len(session_result['non_m_trials']) < 100:
+                        print(f"Skipping {subj}/{sess_date}, less than 100 valid trials.")
+                        continue
+
+                    # Calculate reward rates
+                    behavior_data = session_result['behavioral_data']
+                    rewards = np.array(behavior_data['reward'])
+                    window_size = 20
+                    reward_rates = []
+                    overall_rate = np.mean(rewards)
+
+                    for i in range(len(rewards)):
+                        if i < window_size:
+                            available_data = rewards[:i + 1]
+                            missing_data_weight = (window_size - len(available_data)) / window_size
+                            rate = (np.sum(available_data) + missing_data_weight * window_size * overall_rate) / window_size
+                        else:
+                            rate = np.mean(rewards[i - window_size + 1:i + 1])
+                        reward_rates.append(rate)
+
+                    # Get valid trials
+                    non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
+                                            if idx in session_result["non_m_trials"]])
+                    
+                    # Store data and corresponding reward rates
+                    all_plotting_data.append(session_result['plotting_data'])
+                    all_reward_rates.extend(np.array(reward_rates)[non_m_indices])
+                    all_reward_outcomes.append(session_result["reward_outcomes"][non_m_indices])
+                    
+                    if time_axis is None:
+                        time_axis = session_result['time_axis']
+                
+                # Skip if no valid sessions for this subject
+                if not all_plotting_data:
+                    print(f"No valid sessions found for {subj}")
+                    continue
+                    
+                # Process the data
+                plotting_data = np.vstack(all_plotting_data)
+                reward_rates = np.array(all_reward_rates)
+                reward_outcomes = np.concatenate(all_reward_outcomes)
+                
+                # Create quartile bins for this subject
+                quartile_bins = pd.qcut(reward_rates, q=4, labels=False)
+                
+                # Calculate and store average signals for each quartile for this subject
+                for quartile in range(4):
+                    quartile_trials = quartile_bins == quartile
+                    
+                    # Split by win/loss if requested
+                    if win_loss:
+                        # Rewarded trials in this quartile
+                        quartile_rewarded = (quartile_bins == quartile) & (reward_outcomes == 1)
+                        if np.sum(quartile_rewarded) > 0:
+                            rewarded_avg = np.mean(plotting_data[quartile_rewarded], axis=0)
+                            quartile_data[quartile]['rewarded'].append(rewarded_avg)
+                        
+                        # Unrewarded trials in this quartile
+                        quartile_unrewarded = (quartile_bins == quartile) & (reward_outcomes == 0)
+                        if np.sum(quartile_unrewarded) > 0:
+                            unrewarded_avg = np.mean(plotting_data[quartile_unrewarded], axis=0)
+                            quartile_data[quartile]['unrewarded'].append(unrewarded_avg)
+                    else:
+                        # All trials in this quartile
+                        if np.sum(quartile_trials) > 0:
+                            quartile_avg = np.mean(plotting_data[quartile_trials], axis=0)
+                            quartile_data[quartile]['all'].append(quartile_avg)
+        
+        # Check if we have data to plot
+        if time_axis is None:
+            print("No valid data found for analysis")
+            return None
+        
+        # Calculate average quartile reward rates across subjects
+        if subject_quartile_avgs:
+            quartile_avgs = np.mean(subject_quartile_avgs, axis=0)
+            quartile_sems = np.std(subject_quartile_avgs, axis=0) / np.sqrt(len(subject_quartile_avgs))
+        
+        # Create the plot
+        plt.figure(figsize=(12, 7))
+        colors = ['blue', 'green', 'orange', 'red']
+        
+        # Plot data based on win/loss parameter
+        if win_loss:
+            for quartile in range(4):
+                # Plot rewarded trials
+                if quartile_data[quartile]['rewarded']:
+                    rewarded_avgs = np.array(quartile_data[quartile]['rewarded'])
+                    rewarded_mean = np.mean(rewarded_avgs, axis=0)
+                    rewarded_sem = np.std(rewarded_avgs, axis=0) / np.sqrt(len(rewarded_avgs))
+                    
+                    plt.fill_between(time_axis, rewarded_mean - rewarded_sem,
+                                   rewarded_mean + rewarded_sem, 
+                                   color=colors[quartile], alpha=0.15)
+                    plt.plot(time_axis, rewarded_mean,
+                           color=colors[quartile], linewidth=2,
+                           label=f'Q{quartile+1} Rewarded (n={len(rewarded_avgs)} subjects)')
+                
+                # Plot unrewarded trials
+                if quartile_data[quartile]['unrewarded']:
+                    unrewarded_avgs = np.array(quartile_data[quartile]['unrewarded'])
+                    unrewarded_mean = np.mean(unrewarded_avgs, axis=0)
+                    unrewarded_sem = np.std(unrewarded_avgs, axis=0) / np.sqrt(len(unrewarded_avgs))
+                    
+                    plt.plot(time_axis, unrewarded_mean,
+                           color=colors[quartile], linewidth=2, linestyle='--',
+                           label=f'Q{quartile+1} Unrewarded (n={len(unrewarded_avgs)} subjects)')
+        else:
+            # Plot all trials
+            for quartile in range(4):
+                if quartile_data[quartile]['all']:
+                    all_avgs = np.array(quartile_data[quartile]['all'])
+                    all_mean = np.mean(all_avgs, axis=0)
+                    all_sem = np.std(all_avgs, axis=0) / np.sqrt(len(all_avgs))
+                    
+                    plt.fill_between(time_axis, all_mean - all_sem,
+                                   all_mean + all_sem, 
+                                   color=colors[quartile], alpha=0.15)
+                    plt.plot(time_axis, all_mean,
+                           color=colors[quartile], linewidth=2,
+                           label=f'Q{quartile+1} (n={len(all_avgs)} subjects)')
+        
+        # Add vertical line at cue onset
+        plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+        plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        
+        # Create custom legend with integrated Low-High labels
+        legend_handles = []
+        if win_loss:
+            # First add solid/dashed line explanation
+            solid_line = plt.Line2D([0], [0], color='black', linewidth=2, label='Rewarded')
+            dashed_line = plt.Line2D([0], [0], color='black', linewidth=2, linestyle='--', label='Unrewarded')
+            legend_handles.extend([solid_line, dashed_line])
+            
+            # Add spacer
+            legend_handles.append(plt.Line2D([0], [0], color='none', label=''))
+        
+        # Add color-coded quartiles
+        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low Reward Rate'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↓'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↓'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High Reward Rate'))
+        
+        # Add legend
+        plt.legend(handles=legend_handles, loc='upper right', fontsize=12, 
+                 title="Reward Rate", title_fontsize=12)
+        
+        # Add labels and title
+        plt.xlabel('Time (s)', fontsize=16)
+        plt.ylabel('ΔF/F', fontsize=16)
+        plt.title(f'Pooled Photometry by Reward Rate Quartiles: All Subjects (n={len(specific_subjects)})', 
+                 fontsize=20)
+        plt.xlim([-pre_cue_time, post_cue_time])
+        
+        # Add text with quartile averages at the bottom of the plot
+        quartile_text = "Average reward rates: " + ", ".join([f"Q{q+1}: {quartile_avgs[q]:.3f}±{quartile_sems[q]:.3f}" for q in range(4)])
+        plt.figtext(0.5, 0.01, quartile_text, ha='center', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+        
+        plt.tight_layout(rect=[0, 0.05, 1, 1])  # Make room for the text
+        
+        # Save the figure
+        save_figure(plt.gcf(), "all_subjects", "pooled", 
+                  f"reward_rate_quartiles{'_winloss' if win_loss else ''}")
+        
+        plt.show()
+        
+        return {
+            'subject_id': 'All',
+            'specific_subjects': specific_subjects,
+            'quartile_data': quartile_data,
+            'quartile_avgs': quartile_avgs,
+            'quartile_sems': quartile_sems,
+            'time_axis': time_axis,
+            'win_loss': win_loss
+        }
+    else:
+        # Original single-subject behavior
+        return analyze_reward_rate_quartiles_single(subject_id, session_date, win_loss, behavior_df)
+
+
+def analyze_reward_rate_quartiles_single(subject_id, session_date=None, win_loss=False, behavior_df=None):
     """
     Analyze photometry signals binned by reward rate quartiles for a single session or pooled across sessions
     
@@ -1412,10 +1811,10 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False,
         legend_handles.append(plt.Line2D([0], [0], color='none', label=''))
         
         # Create colored lines for quartiles with Low/High labels
-        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low'))
-        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↑'))
-        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↑'))
-        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low Reward Rate'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↓'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↓'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High Reward Rate'))
         
         # Create the legend with all handles
         plt.legend(handles=legend_handles, loc='upper right', fontsize=12, 
@@ -1431,10 +1830,10 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False,
         legend_handles = []
         
         # Create colored lines for quartiles with Low/High labels
-        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low'))
-        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↑'))
-        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↑'))
-        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low Reward Rate'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↓'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↓'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High Reward Rate'))
         
         # Create the legend
         plt.legend(handles=legend_handles, loc='upper right', fontsize=12, 
@@ -1469,7 +1868,309 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False,
         'quartile_averages': quartile_averages
     }
 
-def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=False, behavior_df=None):
+
+def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=False, behavior_df=None, specific_subjects=None):
+    """
+    Analyze photometry signals binned by computer confidence quartiles for a single subject or across subjects
+    
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject, or "All" for cross-subject analysis
+    session_date : str, optional
+        Specific session to analyze. If None, analyze all sessions.
+    win_loss : bool, optional
+        Whether to split by rewarded/unrewarded trials
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from parquet
+    specific_subjects : list, optional
+        List of subject IDs to include if subject_id="All"
+        
+    Returns:
+    --------
+    dict: Analysis results including quartile bins and confidence data
+    """
+    # Handle cross-subject analysis
+    if subject_id == "All":
+        if specific_subjects is None:
+            # Default list of subjects
+            specific_subjects = ["JOA-M-0022", "JOA-M-0023", "JOA-M-0024", "JOA-M-0025", "JOA-M-0026"]
+            print(f"Using default subject list: {specific_subjects}")
+        
+        # Store data for each quartile across subjects
+        quartile_data = {
+            0: {'rewarded': [], 'unrewarded': [], 'all': []},
+            1: {'rewarded': [], 'unrewarded': [], 'all': []},
+            2: {'rewarded': [], 'unrewarded': [], 'all': []},
+            3: {'rewarded': [], 'unrewarded': [], 'all': []}
+        }
+        
+        # Track quartile averages by subject for overall statistics
+        subject_quartile_avgs = []
+        time_axis = None
+        
+        # Process each subject individually
+        for subj in specific_subjects:
+            print(f"Processing subject {subj} for computer confidence quartile analysis...")
+            
+            # Call the single subject analysis function for each subject
+            # We'll collect the individual results for later averaging
+            subj_result = analyze_comp_confidence_quartiles_single(subj, session_date, win_loss, behavior_df)
+            
+            if subj_result and 'quartile_bins' in subj_result and 'confidence_rates' in subj_result:
+                # Extract the quartile bins and confidence values from this subject
+                quartile_bins = subj_result['quartile_bins']
+                confidence_rates = subj_result['confidence_rates']
+                quartile_avgs = subj_result['quartile_averages']
+                
+                # Store quartile averages for this subject
+                subject_quartile_avgs.append(quartile_avgs)
+                
+                # Get subject-specific quartile data
+                # We need to re-process the subject to get the photometry signals by quartile
+                # (since the original function doesn't return these directly)
+                subject_path = os.path.join(base_dir, subj)
+                
+                # Re-run the necessary parts of the analysis to get the photometry signals
+                # This is similar to logic in analyze_comp_confidence_quartiles_single
+                all_plotting_data = []
+                all_confidences = []
+                all_reward_outcomes = []
+                
+                # Get all sessions for this subject
+                matching_pennies_sessions = set()
+                try:
+                    if behavior_df is not None:
+                        subject_data = behavior_df[behavior_df['subjid'] == subj]
+                        matching_pennies_sessions = set(subject_data['date'].unique())
+                    else:
+                        df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+                        df['date'] = df['date'].astype(str)
+                        subject_data = df[(df['subjid'] == subj) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+                        matching_pennies_sessions = set(subject_data['date'].unique())
+                except Exception as e:
+                    print(f"Warning: Could not load session info for {subj}: {e}")
+                    continue
+
+                sessions = sorted([d for d in os.listdir(subject_path)
+                        if os.path.isdir(os.path.join(subject_path, d)) and
+                        os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                        d in matching_pennies_sessions])
+                
+                # Process each session separately to get photometry data
+                for sess_date in sessions:
+                    session_result = process_session(subj, sess_date, behavior_df=behavior_df)
+                    if not session_result:
+                        continue
+
+                    if len(session_result['non_m_trials']) < 100:
+                        print(f"Skipping {subj}/{sess_date}, less than 100 valid trials.")
+                        continue
+
+                    # Get p-value data for this session
+                    try:
+                        if behavior_df is not None:
+                            # Simply filter from the already filtered dataframe
+                            session_data = behavior_df[(behavior_df['subjid'] == subj) & 
+                                                    (behavior_df['date'] == sess_date)]
+                        else:
+                            # Load from parquet file
+                            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+                            df['date'] = df['date'].astype(str)
+                            session_data = df[(df['subjid'] == subj) & 
+                                            (df['date'] == sess_date) & 
+                                            (df["ignore"] == 0) & 
+                                            (df['protocol'].str.contains('MatchingPennies', na=False))]
+
+                        if session_data.empty:
+                            print(f"No p-value data found for {subj} on {sess_date}")
+                            continue
+                            
+                        # Extract p-values and calculate confidence
+                        p_values = session_data['min_pvalue'].values
+                        min_p_value = 1e-12
+                        p_values = np.maximum(p_values, min_p_value)
+                        confidence = -np.log10(p_values)
+
+                        # Calculate moving average confidence
+                        window_size = 20
+                        confidence_rates = []
+                        overall_confidence = np.mean(confidence)
+
+                        for i in range(len(confidence)):
+                            if i < window_size:
+                                available_data = confidence[:i + 1]
+                                missing_data_weight = (window_size - len(available_data)) / window_size
+                                rate = (np.sum(available_data) + missing_data_weight * window_size * overall_confidence) / window_size
+                            else:
+                                rate = np.mean(confidence[i - window_size + 1:i + 1])
+                            confidence_rates.append(rate)
+
+                        # Get valid trials
+                        non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
+                                                if idx in session_result["non_m_trials"]])
+                        
+                        # Store data and corresponding confidence rates
+                        all_plotting_data.append(session_result['plotting_data'])
+                        all_confidences.extend(np.array(confidence_rates)[non_m_indices])
+                        all_reward_outcomes.append(session_result["reward_outcomes"][non_m_indices])
+                        
+                        if time_axis is None:
+                            time_axis = session_result['time_axis']
+                            
+                    except Exception as e:
+                        print(f"Error processing p-values for {subj}/{sess_date}: {e}")
+                        continue
+                
+                # Skip if no valid sessions for this subject
+                if not all_plotting_data:
+                    print(f"No valid sessions found for {subj}")
+                    continue
+                    
+                # Process the data
+                plotting_data = np.vstack(all_plotting_data)
+                confidence_rates = np.array(all_confidences)
+                reward_outcomes = np.concatenate(all_reward_outcomes)
+                
+                # Create quartile bins for this subject
+                quartile_bins = pd.qcut(confidence_rates, q=4, labels=False)
+                
+                # Calculate and store average signals for each quartile for this subject
+                for quartile in range(4):
+                    quartile_trials = quartile_bins == quartile
+                    
+                    # Split by win/loss if requested
+                    if win_loss:
+                        # Rewarded trials in this quartile
+                        quartile_rewarded = (quartile_bins == quartile) & (reward_outcomes == 1)
+                        if np.sum(quartile_rewarded) > 0:
+                            rewarded_avg = np.mean(plotting_data[quartile_rewarded], axis=0)
+                            quartile_data[quartile]['rewarded'].append(rewarded_avg)
+                        
+                        # Unrewarded trials in this quartile
+                        quartile_unrewarded = (quartile_bins == quartile) & (reward_outcomes == 0)
+                        if np.sum(quartile_unrewarded) > 0:
+                            unrewarded_avg = np.mean(plotting_data[quartile_unrewarded], axis=0)
+                            quartile_data[quartile]['unrewarded'].append(unrewarded_avg)
+                    else:
+                        # All trials in this quartile
+                        if np.sum(quartile_trials) > 0:
+                            quartile_avg = np.mean(plotting_data[quartile_trials], axis=0)
+                            quartile_data[quartile]['all'].append(quartile_avg)
+        
+        # Check if we have data to plot
+        if time_axis is None:
+            print("No valid data found for analysis")
+            return None
+        
+        # Calculate average quartile confidence values across subjects
+        if subject_quartile_avgs:
+            quartile_avgs = np.mean(subject_quartile_avgs, axis=0)
+            quartile_sems = np.std(subject_quartile_avgs, axis=0) / np.sqrt(len(subject_quartile_avgs))
+        
+        # Create the plot
+        plt.figure(figsize=(12, 7))
+        # REVERSED color scheme compared to reward rate quartiles (red=Q1, blue=Q4)
+        colors = ['red', 'orange', 'green', 'blue']
+        
+        # Plot data based on win/loss parameter
+        if win_loss:
+            for quartile in range(4):
+                # Plot rewarded trials
+                if quartile_data[quartile]['rewarded']:
+                    rewarded_avgs = np.array(quartile_data[quartile]['rewarded'])
+                    rewarded_mean = np.mean(rewarded_avgs, axis=0)
+                    rewarded_sem = np.std(rewarded_avgs, axis=0) / np.sqrt(len(rewarded_avgs))
+                    
+                    plt.fill_between(time_axis, rewarded_mean - rewarded_sem,
+                                   rewarded_mean + rewarded_sem, 
+                                   color=colors[quartile], alpha=0.15)
+                    plt.plot(time_axis, rewarded_mean,
+                           color=colors[quartile], linewidth=2,
+                           label=f'Q{quartile+1} Rewarded (n={len(rewarded_avgs)} subjects)')
+                
+                # Plot unrewarded trials
+                if quartile_data[quartile]['unrewarded']:
+                    unrewarded_avgs = np.array(quartile_data[quartile]['unrewarded'])
+                    unrewarded_mean = np.mean(unrewarded_avgs, axis=0)
+                    unrewarded_sem = np.std(unrewarded_avgs, axis=0) / np.sqrt(len(unrewarded_avgs))
+                    
+                    plt.plot(time_axis, unrewarded_mean,
+                           color=colors[quartile], linewidth=2, linestyle='--',
+                           label=f'Q{quartile+1} Unrewarded (n={len(unrewarded_avgs)} subjects)')
+        else:
+            # Plot all trials
+            for quartile in range(4):
+                if quartile_data[quartile]['all']:
+                    all_avgs = np.array(quartile_data[quartile]['all'])
+                    all_mean = np.mean(all_avgs, axis=0)
+                    all_sem = np.std(all_avgs, axis=0) / np.sqrt(len(all_avgs))
+                    
+                    plt.fill_between(time_axis, all_mean - all_sem,
+                                   all_mean + all_sem, 
+                                   color=colors[quartile], alpha=0.15)
+                    plt.plot(time_axis, all_mean,
+                           color=colors[quartile], linewidth=2,
+                           label=f'Q{quartile+1} (n={len(all_avgs)} subjects)')
+        
+        # Add vertical line at cue onset
+        plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+        plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        
+        # Create custom legend with integrated Low-High labels
+        legend_handles = []
+        if win_loss:
+            # First add solid/dashed line explanation
+            solid_line = plt.Line2D([0], [0], color='black', linewidth=2, label='Rewarded')
+            dashed_line = plt.Line2D([0], [0], color='black', linewidth=2, linestyle='--', label='Unrewarded')
+            legend_handles.extend([solid_line, dashed_line])
+            
+            # Add spacer
+            legend_handles.append(plt.Line2D([0], [0], color='none', label=''))
+        
+        # Add color-coded quartiles - REVERSED order for computer confidence
+        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low Comp Conf'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↓'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↓'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High Comp Conf'))
+        
+        # Add legend
+        plt.legend(handles=legend_handles, loc='upper right', fontsize=12, 
+                 title="Computer Confidence", title_fontsize=12)
+        
+        # Add labels and title
+        plt.xlabel('Time (s)', fontsize=16)
+        plt.ylabel('ΔF/F', fontsize=16)
+        plt.title(f'Pooled Photometry by Computer Confidence Quartiles: All Subjects (n={len(specific_subjects)})', 
+                 fontsize=20)
+        plt.xlim([-pre_cue_time, post_cue_time])
+        
+        # Add text with quartile averages at the bottom of the plot
+        quartile_text = "Average confidence values: " + ", ".join([f"Q{q+1}: {quartile_avgs[q]:.4f}±{quartile_sems[q]:.4f}" for q in range(4)])
+        plt.figtext(0.5, 0.01, quartile_text, ha='center', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+        
+        plt.tight_layout(rect=[0, 0.05, 1, 1])  # Make room for the text
+        
+        # Save the figure
+        save_figure(plt.gcf(), "all_subjects", "pooled", 
+                  f"computer_confidence_quartiles{'_winloss' if win_loss else ''}")
+        
+        plt.show()
+        
+        return {
+            'subject_id': 'All',
+            'specific_subjects': specific_subjects,
+            'quartile_data': quartile_data,
+            'quartile_avgs': quartile_avgs,
+            'quartile_sems': quartile_sems,
+            'time_axis': time_axis,
+            'win_loss': win_loss
+        }
+    else:
+        # Original single-subject behavior
+        return analyze_comp_confidence_quartiles_single(subject_id, session_date, win_loss, behavior_df)
+
+def analyze_comp_confidence_quartiles_single(subject_id, session_date=None, win_loss=False, behavior_df=None):
     """
     Analyze photometry signals binned by computer confidence quartiles for a single session or pooled across sessions
 
@@ -1751,10 +2452,10 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
         legend_handles.append(plt.Line2D([0], [0], color='none', label=''))
         
         # Create colored lines for quartiles with Low/High labels - REVERSED order for computer confidence
-        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low'))
-        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↑'))
-        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↑'))
-        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low Comp Conf'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↓'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↓'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High Comp Conf'))
         
         # Create the legend with all handles
         plt.legend(handles=legend_handles, loc='upper right', fontsize=12,
@@ -1770,10 +2471,10 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
         legend_handles = []
         
         # Create colored lines for quartiles with Low/High labels - REVERSED order
-        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low'))
-        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↑'))
-        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↑'))
-        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low Comp Conf'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↓'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↓'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High Comp Conf'))
         
         # Create the legend
         plt.legend(handles=legend_handles, loc='upper right', fontsize=12,
@@ -1801,7 +2502,11 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
                 f"{fig_name}{'_winloss' if win_loss else ''}")
 
     plt.show()
-
+    return {
+        'quartile_bins': quartile_bins,
+        'confidence_rates': confidence_rates,  
+        'quartile_averages': quartile_averages
+    }
 
 def plot_choice_history(behavior_data, subject_id, session_date):
     # Extract choices and rewards
@@ -2352,7 +3057,125 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_
     }
 
 
-def analyze_previous_outcome_effect(subject_id, time_split=False, behavior_df=None):
+def analyze_previous_outcome_effect(subject_id, time_split=False, behavior_df=None, specific_subjects=None):
+    """
+    Analyze photometry signals based on previous and current trial outcomes.
+
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject or "All" for cross-subject analysis
+    time_split : bool, optional (default=False)
+        If True, additionally split data by early/middle/late sessions
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from parquet
+    specific_subjects : list, optional
+        List of subject IDs to include if subject_id="All"
+
+    Returns:
+    --------
+    dict: Analysis results
+    """
+    # Handle cross-subject analysis
+    if subject_id == "All":
+        if specific_subjects is None:
+            # Default list of subjects
+            specific_subjects = ["JOA-M-0022", "JOA-M-0023", "JOA-M-0024", "JOA-M-0025", "JOA-M-0026"]
+            print(f"Using default subject list: {specific_subjects}")
+        
+        # Store subject-level averages for each condition
+        subject_condition_avgs = {
+            'prev_win_curr_win': [],
+            'prev_win_curr_loss': [],
+            'prev_loss_curr_win': [],
+            'prev_loss_curr_loss': []
+        }
+        
+        time_axis = None
+        total_sessions = 0
+        
+        # Process each subject individually
+        for subj in specific_subjects:
+            print(f"Processing subject {subj} for previous outcome effect analysis...")
+            
+            # Process the individual subject (not doing time_split for cross-subject analysis)
+            subj_result = analyze_previous_outcome_effect_single(subj, False, behavior_df)
+            
+            if subj_result and 'condition_data' in subj_result:
+                if time_axis is None:
+                    time_axis = subj_result['time_axis']
+                    
+                total_sessions += subj_result['num_sessions']
+                
+                # Add each condition's average to the subject-level collection
+                for condition in ['prev_win_curr_win', 'prev_win_curr_loss', 'prev_loss_curr_win', 'prev_loss_curr_loss']:
+                    if subj_result['condition_data'][condition]['avg'] is not None:
+                        subject_condition_avgs[condition].append(subj_result['condition_data'][condition]['avg'])
+        
+        # Create the plot if we have data
+        if time_axis is None or not any(subject_condition_avgs.values()):
+            print("No valid data found for cross-subject analysis")
+            return None
+            
+        plt.figure(figsize=(12, 7))
+        
+        # Define colors and labels
+        colors = {
+            'prev_win_curr_win': 'darkgreen',
+            'prev_win_curr_loss': 'firebrick',
+            'prev_loss_curr_win': 'mediumseagreen',
+            'prev_loss_curr_loss': 'indianred'
+        }
+        
+        # Calculate and plot the cross-subject average for each condition
+        for condition, color in colors.items():
+            if len(subject_condition_avgs[condition]) > 0:
+                # Calculate mean and SEM across subjects
+                condition_mean = np.mean(subject_condition_avgs[condition], axis=0)
+                condition_sem = np.std(subject_condition_avgs[condition], axis=0) / np.sqrt(len(subject_condition_avgs[condition]))
+                
+                label_name = condition.replace('prev_', '').replace('curr_', '-').replace('_', ' ').title()
+                
+                plt.fill_between(time_axis,
+                               condition_mean - condition_sem,
+                               condition_mean + condition_sem,
+                               color=color, alpha=0.3)
+                plt.plot(time_axis, condition_mean,
+                       color=color, linewidth=2, 
+                       label=f'{label_name} (n={len(subject_condition_avgs[condition])} subjects)')
+        
+        # Add vertical line at cue onset
+        plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+        plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        
+        # Labels and formatting
+        plt.xlabel('Time (s)', fontsize=16)
+        plt.ylabel('ΔF/F', fontsize=16)
+        plt.title(f'LC Signal by Previous Trial Outcome: All Subjects (n={len(specific_subjects)})', 
+                 fontsize=20)
+        plt.xlim([-pre_cue_time, post_cue_time])
+        plt.legend(loc='upper right', fontsize=16)
+        plt.tight_layout()
+        
+        # Save the figure
+        save_figure(plt.gcf(), "all_subjects", "pooled", "previous_outcome_effect")
+        plt.show()
+        
+        # Return result
+        return {
+            'subject_id': 'All',
+            'specific_subjects': specific_subjects,
+            'subject_condition_avgs': subject_condition_avgs,
+            'time_axis': time_axis,
+            'total_sessions': total_sessions
+        }
+    
+    else:
+        # Original single-subject behavior
+        return analyze_previous_outcome_effect_single(subject_id, time_split, behavior_df)
+    
+
+def analyze_previous_outcome_effect_single(subject_id, time_split=False, behavior_df=None):
     """
     Analyze photometry signals based on previous and current trial outcomes.
 
