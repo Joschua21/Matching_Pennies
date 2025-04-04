@@ -456,6 +456,8 @@ def save_pooled_results(result, subject_id, win_loss=False):
 def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=None, show_session_traces=False, behavior_df=None):
     """Analyze and visualize pooled data for a subject"""
     # Create figure if not provided
+    plt.style.use('default')
+
     if fig is None:
         fig = plt.figure(figsize=(12, 7))
 
@@ -537,8 +539,9 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
             else:
                 plt.legend(loc='upper right', fontsize=10)
                 
-            plt.tight_layout()
-            
+            # Add grid explicitly before other elements
+            plt.grid(True, alpha=0.3)  # Make sure this comes before tight_layout
+
             # Add statistics - count only non-'M' trials
             total_trials = saved_results['total_trials']
             stats_text = (f"Total Sessions: {len(saved_results['session_dates'])}\n"
@@ -546,8 +549,9 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
                         f"Peak: {np.max(saved_results['pooled_average']):.4f}\n"
                         f"Baseline: {np.mean(saved_results['pooled_average'][:pre_cue_samples]):.4f}")
             plt.text(-pre_cue_time + 0.2, saved_results['pooled_average'].max() * 1.2, stats_text,
-                   bbox=dict(facecolor='white', alpha=0.7))
+                bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
             
+            plt.tight_layout()
             # Save the figure with appropriate suffix
             trace_suffix = "_with_sessions" if show_session_traces else ""
             save_figure(plt.gcf(), subject_id, "pooled", f"pooled_results{trace_suffix}{'_winloss' if win_loss else ''}")
@@ -1207,6 +1211,7 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False,
     --------
     dict: Analysis results including quartile bins and signal data
     """
+    original_session_date = session_date  
     all_plotting_data = []
     all_reward_rates = []
     all_reward_outcomes = []
@@ -1328,11 +1333,23 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False,
     # Create the plot
     plt.figure(figsize=(12, 7))
     colors = ['blue', 'green', 'orange', 'red']
+    
+    # Track trial counts
+    trial_counts = {
+        'Q1': {'rewarded': 0, 'unrewarded': 0},
+        'Q2': {'rewarded': 0, 'unrewarded': 0},
+        'Q3': {'rewarded': 0, 'unrewarded': 0},
+        'Q4': {'rewarded': 0, 'unrewarded': 0}
+    }
 
     if win_loss:
         for quartile in range(4):
             quartile_rewarded = (quartile_bins == quartile) & (reward_outcomes == 1)
             quartile_unrewarded = (quartile_bins == quartile) & (reward_outcomes == 0)
+            
+            # Update trial counts
+            trial_counts[f'Q{quartile + 1}']['rewarded'] = np.sum(quartile_rewarded)
+            trial_counts[f'Q{quartile + 1}']['unrewarded'] = np.sum(quartile_unrewarded)
 
             if np.sum(quartile_rewarded) > 0:
                 rewarded_avg = np.mean(plotting_data[quartile_rewarded], axis=0)
@@ -1343,18 +1360,26 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False,
                                color=colors[quartile], alpha=0.3)
                 plt.plot(time_axis, rewarded_avg,
                         color=colors[quartile], linewidth=2,
-                        label=f'Quartile {quartile + 1} Rewarded (n={np.sum(quartile_rewarded)})')
+                        label=f'Q{quartile + 1}')
 
             if np.sum(quartile_unrewarded) > 0:
                 unrewarded_avg = np.mean(plotting_data[quartile_unrewarded], axis=0)
                 unrewarded_sem = calculate_sem(plotting_data[quartile_unrewarded], axis=0)
                 plt.plot(time_axis, unrewarded_avg,
                         color=colors[quartile], linewidth=2, linestyle='--',
-                        label=f'Quartile {quartile + 1} Unrewarded (n={np.sum(quartile_unrewarded)})')
+                        label=f'_Q{quartile + 1}')
     else:
         for quartile in range(4):
             quartile_trials = quartile_bins == quartile
-            if np.sum(quartile_trials) > 0:
+            trial_count = np.sum(quartile_trials)
+            
+            # Calculate rewarded and unrewarded counts for this quartile
+            rewarded_count = np.sum(quartile_trials & (reward_outcomes == 1))
+            unrewarded_count = np.sum(quartile_trials & (reward_outcomes == 0))
+            trial_counts[f'Q{quartile + 1}']['rewarded'] = rewarded_count
+            trial_counts[f'Q{quartile + 1}']['unrewarded'] = unrewarded_count
+            
+            if trial_count > 0:
                 quartile_avg = np.mean(plotting_data[quartile_trials], axis=0)
                 quartile_sem = calculate_sem(plotting_data[quartile_trials], axis=0)
 
@@ -1364,7 +1389,7 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False,
                                color=colors[quartile], alpha=0.3)
                 plt.plot(time_axis, quartile_avg,
                         color=colors[quartile], linewidth=2,
-                        label=f'Quartile {quartile + 1} (n={np.sum(quartile_trials)})')
+                        label=f'Q{quartile + 1}')
 
     plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
@@ -1372,20 +1397,77 @@ def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False,
     plt.ylabel('ΔF/F', fontsize=16)
     plt.title(plot_title, fontsize=20)
     plt.xlim([-pre_cue_time, post_cue_time])
-    plt.legend(loc='upper right', fontsize=16)
     
-    # Add text with quartile averages at the bottom of the plot
-    quartile_text = "Average reward rates: " + ", ".join([f"Q{q+1}: {avg:.4f}" for q, avg in enumerate(quartile_averages)])
-    plt.figtext(0.5, 0.01, quartile_text, ha='center', fontsize=16, bbox=dict(facecolor='white', alpha=0.8))
+    # Custom legend with integrated Low-High labels and arrow
+    if win_loss:
+        # Create a list of custom legend handles
+        legend_handles = []
+        
+        # First add solid/dashed line explanation
+        solid_line = plt.Line2D([0], [0], color='black', linewidth=2, label='Rewarded')
+        dashed_line = plt.Line2D([0], [0], color='black', linewidth=2, linestyle='--', label='Unrewarded')
+        legend_handles.extend([solid_line, dashed_line])
+        
+        # Add spacer
+        legend_handles.append(plt.Line2D([0], [0], color='none', label=''))
+        
+        # Create colored lines for quartiles with Low/High labels
+        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High'))
+        
+        # Create the legend with all handles
+        plt.legend(handles=legend_handles, loc='upper right', fontsize=12, 
+                 title="Reward Rate", title_fontsize=12)
+        
+        # Add trial counts as text on the left side below the figure
+        trial_count_text = "Trial counts:\n"
+        for q in range(4):
+            trial_count_text += f"Q{q+1}: {trial_counts[f'Q{q+1}']['rewarded']} rewarded, {trial_counts[f'Q{q+1}']['unrewarded']} unrewarded\n"
+        plt.figtext(0.25, 0.02, trial_count_text, ha='left', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+    else:
+        # Custom legend for non-win/loss plots
+        legend_handles = []
+        
+        # Create colored lines for quartiles with Low/High labels
+        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High'))
+        
+        # Create the legend
+        plt.legend(handles=legend_handles, loc='upper right', fontsize=12, 
+                 title="Reward Rate", title_fontsize=12)
+        
+        # Add trial counts as text on the left side below the figure
+        trial_count_text = "Trial counts:\n"
+        for q in range(4):
+            trial_count_text += f"Q{q+1}: {trial_counts[f'Q{q+1}']['rewarded']} rewarded, {trial_counts[f'Q{q+1}']['unrewarded']} unrewarded\n"
+        plt.figtext(0.25, 0.02, trial_count_text, ha='left', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+    
+    # Add text with quartile averages at the right side bottom of the plot
+    quartile_text = "Average reward rates:\n" + "\n".join([f"Q{q+1}: {avg:.3f}" for q, avg in enumerate(quartile_averages)])
+    plt.figtext(0.75, 0.02, quartile_text, ha='left', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
 
-    plt.tight_layout(rect=[0, 0.05, 1, 1])  # Make room for the text at the bottom
+    plt.tight_layout(rect=[0, 0.12, 1, 1])  # Make room for the text at the bottom
 
     # Save the figure
-    fig_name = f"reward_rate_quartiles{'_pooled' if session_date is None else ''}"
-    save_figure(plt.gcf(), subject_id, session_date or "pooled", 
-               f"{fig_name}{'_winloss' if win_loss else ''}")
-
+    fig_name = "reward_rate_quartiles"
+    if original_session_date is None:
+        save_figure(plt.gcf(), subject_id, "pooled", 
+                f"{fig_name}{'_pooled'}{'_winloss' if win_loss else ''}")
+    else:
+        save_figure(plt.gcf(), subject_id, original_session_date, 
+                f"{fig_name}{'_winloss' if win_loss else ''}")
+        
     plt.show()
+    
+    return {
+        'quartile_bins': quartile_bins,
+        'reward_rates': reward_rates,
+        'quartile_averages': quartile_averages
+    }
 
 def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=False, behavior_df=None):
     """
@@ -1406,6 +1488,7 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
     --------
     dict: Analysis results including quartile bins and confidence values
     """
+    original_session_date = session_date
     all_plotting_data = []
     all_confidences = []
     all_reward_outcomes = []
@@ -1587,12 +1670,25 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
 
     # Create the plot
     plt.figure(figsize=(12, 7))
-    colors = ['blue', 'green', 'orange', 'red']  # From lowest to highest confidence
+    # REVERSED color scheme compared to reward rate quartiles (red=Q1, blue=Q4)
+    colors = ['red', 'orange', 'green', 'blue']  # From lowest to highest confidence
+    
+    # Track trial counts
+    trial_counts = {
+        'Q1': {'rewarded': 0, 'unrewarded': 0},
+        'Q2': {'rewarded': 0, 'unrewarded': 0},
+        'Q3': {'rewarded': 0, 'unrewarded': 0},
+        'Q4': {'rewarded': 0, 'unrewarded': 0}
+    }
 
     if win_loss:
         for quartile in range(4):
             quartile_rewarded = (quartile_bins == quartile) & (reward_outcomes == 1)
             quartile_unrewarded = (quartile_bins == quartile) & (reward_outcomes == 0)
+            
+            # Update trial counts
+            trial_counts[f'Q{quartile + 1}']['rewarded'] = np.sum(quartile_rewarded)
+            trial_counts[f'Q{quartile + 1}']['unrewarded'] = np.sum(quartile_unrewarded)
 
             if np.sum(quartile_rewarded) > 0:
                 rewarded_avg = np.mean(plotting_data[quartile_rewarded], axis=0)
@@ -1603,18 +1699,26 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
                                  color=colors[quartile], alpha=0.3)
                 plt.plot(time_axis, rewarded_avg,
                          color=colors[quartile], linewidth=2,
-                         label=f'Quartile {quartile + 1} Rewarded (n={np.sum(quartile_rewarded)})')
+                         label=f'Q{quartile + 1}')
 
             if np.sum(quartile_unrewarded) > 0:
                 unrewarded_avg = np.mean(plotting_data[quartile_unrewarded], axis=0)
                 unrewarded_sem = calculate_sem(plotting_data[quartile_unrewarded], axis=0)
                 plt.plot(time_axis, unrewarded_avg,
                          color=colors[quartile], linewidth=2, linestyle='--',
-                         label=f'Quartile {quartile + 1} Unrewarded (n={np.sum(quartile_unrewarded)})')
+                         label=f'_Q{quartile + 1}')
     else:
         for quartile in range(4):
             quartile_trials = quartile_bins == quartile
-            if np.sum(quartile_trials) > 0:
+            trial_count = np.sum(quartile_trials)
+            
+            # Calculate rewarded and unrewarded counts for this quartile
+            rewarded_count = np.sum(quartile_trials & (reward_outcomes == 1))
+            unrewarded_count = np.sum(quartile_trials & (reward_outcomes == 0))
+            trial_counts[f'Q{quartile + 1}']['rewarded'] = rewarded_count
+            trial_counts[f'Q{quartile + 1}']['unrewarded'] = unrewarded_count
+            
+            if trial_count > 0:
                 quartile_avg = np.mean(plotting_data[quartile_trials], axis=0)
                 quartile_sem = calculate_sem(plotting_data[quartile_trials], axis=0)
 
@@ -1624,7 +1728,7 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
                                  color=colors[quartile], alpha=0.3)
                 plt.plot(time_axis, quartile_avg,
                          color=colors[quartile], linewidth=2,
-                         label=f'Quartile {quartile + 1} (n={np.sum(quartile_trials)})')
+                         label=f'Q{quartile + 1}')
 
     plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
@@ -1632,17 +1736,68 @@ def analyze_comp_confidence_quartiles(subject_id, session_date=None, win_loss=Fa
     plt.ylabel('ΔF/F', fontsize=12)
     plt.title(plot_title, fontsize=14)
     plt.xlim([-pre_cue_time, post_cue_time])
-    plt.legend(loc='upper right')
     
-    # Add text with quartile averages at the bottom of the plot
-    quartile_text = "Average confidence values: " + ", ".join([f"Q{q+1}: {avg:.4f}" for q, avg in enumerate(quartile_averages)])
-    plt.figtext(0.5, 0.01, quartile_text, ha='center', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+    # Custom legend with integrated Low-High labels and arrow
+    if win_loss:
+        # Create a list of custom legend handles
+        legend_handles = []
+        
+        # First add solid/dashed line explanation
+        solid_line = plt.Line2D([0], [0], color='black', linewidth=2, label='Rewarded')
+        dashed_line = plt.Line2D([0], [0], color='black', linewidth=2, linestyle='--', label='Unrewarded')
+        legend_handles.extend([solid_line, dashed_line])
+        
+        # Add spacer
+        legend_handles.append(plt.Line2D([0], [0], color='none', label=''))
+        
+        # Create colored lines for quartiles with Low/High labels - REVERSED order for computer confidence
+        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High'))
+        
+        # Create the legend with all handles
+        plt.legend(handles=legend_handles, loc='upper right', fontsize=12,
+                  title="Computer Confidence", title_fontsize=12)
+        
+        # Add trial counts as text on the left side below the figure
+        trial_count_text = "Trial counts:\n"
+        for q in range(4):
+            trial_count_text += f"Q{q+1}: {trial_counts[f'Q{q+1}']['rewarded']} rewarded, {trial_counts[f'Q{q+1}']['unrewarded']} unrewarded\n"
+        plt.figtext(0.25, 0.02, trial_count_text, ha='left', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+    else:
+        # For non-win/loss plots, similar legend without the solid/dashed explanation
+        legend_handles = []
+        
+        # Create colored lines for quartiles with Low/High labels - REVERSED order
+        legend_handles.append(plt.Line2D([0], [0], color=colors[0], linewidth=2, label='Q1   Low'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[1], linewidth=2, label='Q2   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[2], linewidth=2, label='Q3   ↑'))
+        legend_handles.append(plt.Line2D([0], [0], color=colors[3], linewidth=2, label='Q4   High'))
+        
+        # Create the legend
+        plt.legend(handles=legend_handles, loc='upper right', fontsize=12,
+                  title="Computer Confidence", title_fontsize=12)
+        
+        # Add trial counts as text on the left side below the figure
+        trial_count_text = "Trial counts:\n"
+        for q in range(4):
+            trial_count_text += f"Q{q+1}: {trial_counts[f'Q{q+1}']['rewarded']} rewarded, {trial_counts[f'Q{q+1}']['unrewarded']} unrewarded\n"
+        plt.figtext(0.25, 0.02, trial_count_text, ha='left', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+    
+    # Add text with quartile averages at the right side bottom of the plot
+    quartile_text = "Average confidence values:\n" + "\n".join([f"Q{q+1}: {avg:.4f}" for q, avg in enumerate(quartile_averages)])
+    plt.figtext(0.75, 0.02, quartile_text, ha='left', fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
 
-    plt.tight_layout(rect=[0, 0.05, 1, 1])  # Make room for the text at the bottom
+    plt.tight_layout(rect=[0, 0.12, 1, 1])  # Make room for the text at the bottom
 
     # Save the figure
-    fig_name = f"computer_confidence_quartiles{'_pooled' if session_date is None else ''}"
-    save_figure(plt.gcf(), subject_id, session_date or "pooled",
+    fig_name = "computer_confidence_quartiles"
+    if original_session_date is None:
+        save_figure(plt.gcf(), subject_id, "pooled",
+                f"{fig_name}{'_pooled'}{'_winloss' if win_loss else ''}")
+    else:
+        save_figure(plt.gcf(), subject_id, original_session_date,
                 f"{fig_name}{'_winloss' if win_loss else ''}")
 
     plt.show()
@@ -1684,33 +1839,37 @@ def plot_choice_history(behavior_data, subject_id, session_date):
     
     return fig
 
+
 def plot_per_session_win_loss(subject_id, behavior_df=None):
     """
     Plot win/loss traces for each session of a subject with choice history
     and state probabilities
-    
+
     Parameters:
     -----------
     subject_id : str
         The identifier for the subject
     behavior_df : pandas.DataFrame, optional
         Pre-loaded behavior dataframe to use instead of loading from parquet
-        
+
     Returns:
     --------
     dict: Dictionary of session win-loss analyses
     """
     # Find all sessions for the subject
     subject_path = os.path.join(base_dir, subject_id)
-    
+
     # Get matching pennies sessions from behavior dataframe if provided, otherwise load from parquet
     matching_pennies_sessions = set()
+    subject_data = None
+
     try:
         if behavior_df is not None:
             # If behavior_df is provided, filter it for this subject
             subject_data = behavior_df[behavior_df['subjid'] == subject_id]
             matching_pennies_sessions = set(subject_data['date'].unique())
-            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
+            print(
+                f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
         else:
             # Otherwise load from parquet file
             df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
@@ -1723,15 +1882,21 @@ def plot_per_session_win_loss(subject_id, behavior_df=None):
 
     # Sort sessions chronologically, filtering to only include MatchingPennies sessions
     sessions = sorted([d for d in os.listdir(subject_path)
-                if os.path.isdir(os.path.join(subject_path, d)) and
-                os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
-                d in matching_pennies_sessions])
+                       if os.path.isdir(os.path.join(subject_path, d)) and
+                       os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                       d in matching_pennies_sessions])
 
     # Find max peak for consistent y-axis scaling
     max_peak = float('-inf')
     min_peak = float('inf')
     session_analyses = {}
     valid_sessions = []
+
+    # Check if state probability data is available
+    has_state_data = False
+    if subject_data is not None and 'p_stochastic' in subject_data.columns:
+        # Check if at least one session has non-zero, non-NaN values
+        has_state_data = subject_data['p_stochastic'].notna().any() and subject_data['p_stochastic'].any()
 
     # First pass: find valid sessions and determine y-axis scaling
     for session_date in sessions:
@@ -1741,16 +1906,17 @@ def plot_per_session_win_loss(subject_id, behavior_df=None):
             continue
 
         if len(session_result['non_m_trials']) < 100:
-            print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
+            print(
+                f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
             continue  # Skip this session
-            
+
         # Add to valid sessions list since it has enough trials
         valid_sessions.append(session_date)
 
         # Filter out missed trials
         non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"])
-                                if idx in session_result["non_m_trials"]])
-        
+                                  if idx in session_result["non_m_trials"]])
+
         # Get reward outcomes and photometry data for valid non-missed trials
         reward_outcomes = session_result["reward_outcomes"][non_m_indices]
         session_plots = session_result['plotting_data']
@@ -1758,25 +1924,25 @@ def plot_per_session_win_loss(subject_id, behavior_df=None):
         # Separate rewarded and unrewarded trials
         win_plots = session_plots[reward_outcomes == 1]
         loss_plots = session_plots[reward_outcomes == 0]
-        
+
         # Skip this session if not enough win/loss trials
         if len(win_plots) < 5 or len(loss_plots) < 5:
             print(f"Skipping {subject_id}/{session_date}, not enough win/loss trials.")
             valid_sessions.pop()  # Remove from valid sessions
             continue
-            
+
         # Calculate averages
         win_avg = np.mean(win_plots, axis=0)
         loss_avg = np.mean(loss_plots, axis=0)
-        
+
         # Calculate SEMs
         win_sem = calculate_sem(win_plots, axis=0)
         loss_sem = calculate_sem(loss_plots, axis=0)
-        
+
         # Find max/min for y-axis scaling
         max_peak = max(max_peak, np.max(win_avg + win_sem), np.max(loss_avg + loss_sem))
         min_peak = min(min_peak, np.min(win_avg - win_sem), np.min(loss_avg - loss_sem))
-        
+
         # Store session data
         session_analyses[session_date] = {
             'win_avg': win_avg,
@@ -1787,89 +1953,92 @@ def plot_per_session_win_loss(subject_id, behavior_df=None):
             'loss_count': len(loss_plots),
             'session_result': session_result  # Keep the full result for later
         }
-    
+
     if not valid_sessions:
         print(f"No valid sessions found for {subject_id}")
         return {}
-        
+
     # Add some buffer to y-axis limits
     y_range = max_peak - min_peak
     y_max = max_peak + 0.05 * y_range
     y_min = min_peak - 0.05 * y_range
-    
+
     # Calculate layout
     n_sessions = len(valid_sessions)
-    n_cols = 3  # Show 5 sessions per row
+    n_cols = 3  # Show 3 sessions per row
     n_rows = (n_sessions + n_cols - 1) // n_cols  # Ceiling division
-    
+
+    # Determine number of rows per session (2 if no state data, 3 if state data exists)
+    plots_per_session = 3 if has_state_data else 2
+
     # Create figure with proper size
-    fig = plt.figure(figsize=(18, 8*n_rows))  # Each row is 7 inches tall
-    
+    fig = plt.figure(figsize=(18, 5 * n_rows * plots_per_session / 3))  # Adjust height based on rows per session
+
     # Add a big general title above all plots
     fig.suptitle(f"Session History for {subject_id}", fontsize=24, y=0.98)
-    
-    # Create GridSpec to control the layout - 3 rows per session (photometry + choice + state)
-    gs = plt.GridSpec(n_rows*3, n_cols, height_ratios=[2, 1, 1] * n_rows)  # Repeat [2,1,1] pattern for each row
-    
+
+    # Create GridSpec to control the layout - 2 or 3 rows per session based on state data
+    gs = plt.GridSpec(n_rows * plots_per_session, n_cols)
+
     # Second pass: create all the plots
     time_axis = None
-    
+
     for i, session_date in enumerate(valid_sessions):
         row = i // n_cols
         col = i % n_cols
-        
+
         session_data = session_analyses[session_date]
         session_result = session_data['session_result']
         behavior_data = session_result['behavioral_data']
-        
+
         # Set time axis from the first valid session if not set yet
         if time_axis is None:
             time_axis = session_result['time_axis']
-            
-        # Photometry plot (1st row of 3 for this session)
-        ax1 = fig.add_subplot(gs[row*3, col])
-        
+
+        # Photometry plot (1st row of plots_per_session for this session)
+        ax1 = fig.add_subplot(gs[row * plots_per_session, col])
+
         # Plot reward outcomes - using pre-calculated values from first pass
-        ax1.fill_between(time_axis, 
+        ax1.fill_between(time_axis,
                          session_data['win_avg'] - session_data['win_sem'],
                          session_data['win_avg'] + session_data['win_sem'],
                          color='lightgreen', alpha=0.3)
-                         
-        ax1.plot(time_axis, session_data['win_avg'], color='green', linewidth=2, 
+
+        ax1.plot(time_axis, session_data['win_avg'], color='green', linewidth=2,
                  label=f'Win (n={session_data["win_count"]})')
-                 
-        ax1.fill_between(time_axis, 
+
+        ax1.fill_between(time_axis,
                          session_data['loss_avg'] - session_data['loss_sem'],
                          session_data['loss_avg'] + session_data['loss_sem'],
                          color='lightsalmon', alpha=0.3)
-                         
+
         ax1.plot(time_axis, session_data['loss_avg'], color='darkorange', linewidth=2,
                  label=f'Loss (n={session_data["loss_count"]})')
-        
+
         # Add vertical line at cue onset
         ax1.axvline(x=0, color='black', linestyle='--', linewidth=1, label='Lick Timing')
-        
+
         # Use consistent y-axis scaling across all sessions
         ax1.set_ylim(y_min, y_max)
-        
+
         # Add horizontal line at y=0
         ax1.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
-        
+
         # Only add x labels to bottom row
         ax1.set_xlabel('Time (s)')
-        
+
         # Only add y labels to leftmost column
         if col == 0:
             ax1.set_ylabel('ΔF/F')
-            
+
         ax1.set_title(f"{session_date}", fontsize=12)
-        
+
         # Add legend to first plot only
         if i == 0:
             ax1.legend(loc='upper right')
-        
-        # Choice history plot (2nd row of 3 for this session)
-        ax2 = fig.add_subplot(gs[row*3 + 1, col])
+
+        # Choice history plot (2nd row of plots_per_session for this session)
+        ax2 = fig.add_subplot(gs[row * plots_per_session + 1, col])
 
         # Extract choices and rewards
         choices = np.array(behavior_data['choice'])
@@ -1900,77 +2069,70 @@ def plot_per_session_win_loss(subject_id, behavior_df=None):
         ax2.set_title('Choice History')
         ax2.grid(True, alpha=0.3)
 
+        # Only add state probabilities plot if data is available
+        if has_state_data:
+            # State probabilities plot (3rd row of plots_per_session for this session)
+            ax3 = fig.add_subplot(gs[row * plots_per_session + 2, col])
 
-        # State probabilities plot (3rd row of 3 for this session)
-        ax3 = fig.add_subplot(gs[row*3 + 2, col])
-        
-        # Get state probability data for this session
-        if behavior_df is not None:
-            session_df = behavior_df[(behavior_df['subjid'] == subject_id) & 
-                                    (behavior_df['date'] == session_date)]
-        else:
-            # Load from parquet file - this should rarely happen with your new approach
-            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
-            df['date'] = df['date'].astype(str)
-            session_df = df[(df['subjid'] == subject_id) & 
-                            (df['date'] == session_date) & 
-                            (df["ignore"] == 0) & 
-                            (df['protocol'].str.contains('MatchingPennies', na=False))]
-        
-        if not session_df.empty and 'p_stochastic' in session_df.columns:
-            # Plot state probabilities if available
-            x_values = np.arange(len(session_df))
-            
-            # Plot each state probability
-            ax3.plot(x_values, session_df['p_stochastic'], color='green', linewidth=1.5, label='Stochastic')
-            ax3.plot(x_values, session_df['p_leftbias'], color='red', linewidth=1.5, label='Left Bias')
-            ax3.plot(x_values, session_df['p_rightbias'], color='blue', linewidth=1.5, label='Right Bias')
-            
-            # Add threshold line
-            ax3.axhline(y=0.8, color='black', linestyle='--', linewidth=0.5, alpha=0.7, label='Threshold')
-            
-            # Add text marker for highest probability at final trial
-            final_idx = len(session_df) - 1
-            if final_idx >= 0:
-                probs = {
-                    'Stochastic': session_df.iloc[final_idx]['p_stochastic'],
-                    'Left Bias': session_df.iloc[final_idx]['p_leftbias'],
-                    'Right Bias': session_df.iloc[final_idx]['p_rightbias']
-                }
-                max_state = max(probs, key=probs.get)
-                max_prob = probs[max_state]
-                
-                if max_prob >= 0.8:  # Only add marker if probability is high enough
-                    ax3.text(final_idx, max_prob, max_state[0], 
-                            fontsize=8, ha='center', va='bottom')
-                    
-            # Set y-axis limits
-            ax3.set_ylim(-0.05, 1.05)
-            ax3.set_ylabel('State Prob.')
-            
-            # Only show legend for first plot to avoid clutter
-            if i == 0:
-                ax3.legend(loc='upper right', fontsize=7)
-                
-            # Set x-axis limits
-            ax3.set_xlim(0, len(session_df))
-        else:
-            # No state data available
-            ax3.text(0.5, 0.5, "No state probability data", 
-                    ha='center', va='center', transform=ax3.transAxes)
-            ax3.set_ylabel('State Prob.')
-            ax3.set_ylim(0, 1)
-        
-        ax3.set_xlabel('Trial Number')
-    
+            # Get state probability data for this session
+            if behavior_df is not None:
+                session_df = behavior_df[(behavior_df['subjid'] == subject_id) &
+                                         (behavior_df['date'] == session_date)]
+            else:
+                # This should rarely happen since we already loaded the data above
+                session_df = subject_data[subject_data['date'] == session_date]
+
+            if not session_df.empty and 'p_stochastic' in session_df.columns:
+                # Plot state probabilities if available
+                x_values = np.arange(len(session_df))
+
+                # Plot each state probability
+                ax3.plot(x_values, session_df['p_stochastic'], color='green', linewidth=1.5, label='Stochastic')
+                ax3.plot(x_values, session_df['p_leftbias'], color='red', linewidth=1.5, label='Left Bias')
+                ax3.plot(x_values, session_df['p_rightbias'], color='blue', linewidth=1.5, label='Right Bias')
+
+                # Add threshold line
+                ax3.axhline(y=0.8, color='black', linestyle='--', linewidth=0.5, alpha=0.7, label='Threshold')
+
+                # Add text marker for highest probability at final trial
+                final_idx = len(session_df) - 1
+                if final_idx >= 0:
+                    probs = {
+                        'Stochastic': session_df.iloc[final_idx]['p_stochastic'],
+                        'Left Bias': session_df.iloc[final_idx]['p_leftbias'],
+                        'Right Bias': session_df.iloc[final_idx]['p_rightbias']
+                    }
+                    max_state = max(probs, key=probs.get)
+                    max_prob = probs[max_state]
+
+                    if max_prob >= 0.8:  # Only add marker if probability is high enough
+                        ax3.text(final_idx, max_prob, max_state[0],
+                                 fontsize=8, ha='center', va='bottom')
+
+                # Set y-axis limits
+                ax3.set_ylim(-0.05, 1.05)
+                ax3.set_ylabel('State Prob.')
+
+                # Only show legend for first plot to avoid clutter
+                if i == 0:
+                    ax3.legend(loc='upper right', fontsize=7)
+
+                # Set x-axis limits
+                ax3.set_xlim(0, len(session_df))
+            else:
+                # No state data available
+                ax3.text(0.5, 0.5, "No state probability data",
+                         ha='center', va='center', transform=ax3.transAxes)
+                ax3.set_ylabel('State Prob.')
+                ax3.set_ylim(0, 1)
+
+            ax3.set_xlabel('Trial Number')
+
     # Adjust layout to make room for the suptitle
     plt.tight_layout(rect=[0, 0, 1, 0.96])  # Leave space at top for suptitle
-    
     # Save the figure
     save_figure(fig, subject_id, "all_sessions", "per_session_win_loss_with_choices_and_states")
-    
     plt.show()
-    
 
 def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_conf=False, behavior_df=None, sem=True):
     """
@@ -2247,7 +2409,7 @@ def analyze_previous_outcome_effect(subject_id, time_split=False, behavior_df=No
     if time_split:
         # First pass: identify valid sessions with enough trials
         valid_sessions = []
-        
+
         # Check each session for having enough trials
         for session_date in sessions:
             session_path = os.path.join(subject_path, session_date)
@@ -2257,7 +2419,12 @@ def analyze_previous_outcome_effect(subject_id, time_split=False, behavior_df=No
                 if result and len(result['non_m_trials']) >= 100:
                     valid_sessions.append(session_date)
                 else:
-                    print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
+                    # Use 'result' instead of 'session_result' to avoid the NameError
+                    if result:
+                        print(
+                            f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(result['non_m_trials'])}).")
+                    else:
+                        print(f"Skipping {subject_id}/{session_date}, could not process session.")
 
         # Now split the valid sessions evenly
         num_valid = len(valid_sessions)
@@ -2268,7 +2435,7 @@ def analyze_previous_outcome_effect(subject_id, time_split=False, behavior_df=No
             # Calculate split points for even division
             early_end = num_valid // 3
             middle_end = 2 * (num_valid // 3)
-            
+
             # Adjust for remainder (ensure most even split possible)
             if num_valid % 3 == 1:
                 # Add the extra session to the last group
@@ -2278,8 +2445,8 @@ def analyze_previous_outcome_effect(subject_id, time_split=False, behavior_df=No
             elif num_valid % 3 == 2:
                 # Add one extra session to middle and late groups
                 early_sessions = valid_sessions[:early_end]
-                middle_sessions = valid_sessions[early_end:middle_end+1]
-                late_sessions = valid_sessions[middle_end+1:]
+                middle_sessions = valid_sessions[early_end:middle_end + 1]
+                late_sessions = valid_sessions[middle_end + 1:]
             else:
                 # Perfect division
                 early_sessions = valid_sessions[:early_end]
@@ -2305,7 +2472,7 @@ def analyze_previous_outcome_effect(subject_id, time_split=False, behavior_df=No
             result = process_session(subject_id, session_date, behavior_df=behavior_df)
             if result:
                 if len(result['non_m_trials']) < 100:
-                    print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
+                    print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(result['non_m_trials'])}).")
                     continue
 
                 all_sessions.append(result)
@@ -4311,6 +4478,8 @@ def analyze_switch_probability_quartiles(subject_id, session_date=None, win_loss
     --------
     dict: Analysis results including quartile bins and switch probability values
     """
+    original_session_date = session_date
+
     all_plotting_data = []
     all_switch_probs = []
     all_reward_outcomes = []
@@ -4585,19 +4754,15 @@ def analyze_switch_probability_quartiles(subject_id, session_date=None, win_loss
 
     plt.tight_layout(rect=[0, 0.05, 1, 1])  # Make room for the text at the bottom
 
-    # Save the figure
-    fig_name = f"switch_probability_quartiles{'_pooled' if session_date is None else ''}"
-    save_figure(plt.gcf(), subject_id, session_date or "pooled",
+    fig_name = "switch_probability_quartiles"
+    if original_session_date is None:
+        save_figure(plt.gcf(), subject_id, "pooled",
+                f"{fig_name}{'_pooled'}{'_winloss' if win_loss else ''}")
+    else:
+        save_figure(plt.gcf(), subject_id, original_session_date,
                 f"{fig_name}{'_winloss' if win_loss else ''}")
 
     plt.show()
-
-    return {
-        'quartile_bins': quartile_bins,
-        'switch_probs': switch_probs,
-        'quartile_averages': quartile_averages
-    }
-
 
 def analyze_signal_state_effects_on_switching(subject_id, signal_window='pre_cue', condition='loss', behavior_df=None):
     """
