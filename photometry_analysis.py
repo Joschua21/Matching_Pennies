@@ -12,8 +12,8 @@ from scipy.stats import chi2_contingency, fisher_exact
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Global parameters
-base_dir = r"Z:\delab\lab-members\joanna\photometry\preprocess"
-output_dir = r"Z:\delab\lab-members\joschua\photometry_analysis"
+base_dir = "/Volumes/ogma/delab/lab-members/joanna/photometry/preprocess"
+output_dir = "/Volumes/ogma/delab/lab-members/joschua/photometry_analysis"
 sampling_rate = 120
 pre_cue_time = 3
 post_cue_time = 5
@@ -21,7 +21,7 @@ pre_cue_samples = int(pre_cue_time * sampling_rate)
 post_cue_samples = int(post_cue_time * sampling_rate)
 total_window_samples = pre_cue_samples + post_cue_samples
 
-PARQUET_PATH = r"Z:\delab\matchingpennies\matchingpennies_datatable.parquet"
+PARQUET_PATH = "/Volumes/ogma/delab/matchingpennies/matchingpennies_datatable.parquet"
 CODE_VERSION = "1.0.9"  # Increment this when making analysis changes --> will force recomputation of all data
 _SESSION_CACHE = {}
 
