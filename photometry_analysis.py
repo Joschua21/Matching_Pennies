@@ -3056,8 +3056,7 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_
         'sorted_sessions': sorted_sessions
     }
 
-
-def analyze_previous_outcome_effect(subject_id, time_split=False, behavior_df=None, specific_subjects=None):
+def analyze_previous_outcome_effect(subject_id="All", time_split=False, behavior_df=None, specific_subjects=None):
     """
     Analyze photometry signals based on previous and current trial outcomes.
 
@@ -3173,7 +3172,6 @@ def analyze_previous_outcome_effect(subject_id, time_split=False, behavior_df=No
     else:
         # Original single-subject behavior
         return analyze_previous_outcome_effect_single(subject_id, time_split, behavior_df)
-    
 
 def analyze_previous_outcome_effect_single(subject_id, time_split=False, behavior_df=None):
     """
@@ -3600,6 +3598,7 @@ def analyze_previous_outcome_effect_single(subject_id, time_split=False, behavio
         'num_sessions': len(all_sessions),
         'session_dates': session_dates
     }
+    return result
 
 
 def analyze_win_stay_lose_switch(subject_id, session_date=None, behavior_df=None):
@@ -3801,7 +3800,176 @@ def analyze_win_stay_lose_switch(subject_id, session_date=None, behavior_df=None
     return wsls_results
 
 
-def analyze_loss_streaks_before_win(subject_id, skipped_missed=True, only_1_5=False, behavior_df=None):
+def analyze_loss_streaks_before_win(subject_id="All", skipped_missed=True, only_1_5=False, behavior_df=None, specific_subjects=None):
+    """
+    Analyze photometry signals for loss streaks of different lengths that end with a win.
+    This function identifies trials that were not rewarded but where the next trial was rewarded,
+    and categorizes them based on the number of consecutive losses before that trial.
+
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject or "All" for cross-subject analysis
+    skipped_missed : bool, optional (default=True)
+        If True, filter out missed trials ('M') from streak calculation
+        If False, include missed trials as losses as long as reward=0
+    only_1_5 : bool, optional (default=False)
+        If True, only plot categories 1 and 5+ (shortest and longest streaks)
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from parquet
+    specific_subjects : list, optional
+        List of subject IDs to include if subject_id="All"
+        
+    Returns:
+    --------
+    dict: Analysis results for different loss streak lengths
+    """
+    # Handle cross-subject analysis
+    if subject_id == "All":
+        if specific_subjects is None:
+            # Default list of subjects
+            specific_subjects = ["JOA-M-0022", "JOA-M-0023", "JOA-M-0024", "JOA-M-0025", "JOA-M-0026"]
+            print(f"Using default subject list: {specific_subjects}")
+        
+        # Store subject-level data for each streak category
+        subject_streak_avgs = {
+            '1_loss': [],
+            '2_loss': [],
+            '3_loss': [],
+            '4_loss': [],
+            '5plus_loss': []
+        }
+        
+        # Store number of trials in each category per subject
+        subject_trial_counts = {
+            '1_loss': [],
+            '2_loss': [],
+            '3_loss': [],
+            '4_loss': [],
+            '5plus_loss': []
+        }
+        
+        time_axis = None
+        total_trials = 0
+        
+        # Process each subject individually
+        for subj in specific_subjects:
+            print(f"Processing subject {subj} for loss streaks before win analysis...")
+            
+            # Process individual subject
+            subj_result = analyze_loss_streaks_before_win_single(subj, skipped_missed, only_1_5, behavior_df)
+            
+            if subj_result and 'streak_averages' in subj_result:
+                if time_axis is None:
+                    time_axis = subj_result['time_axis']
+                
+                total_trials += subj_result['total_trials']
+                
+                # Add each streak category's average to the subject-level collection
+                for category in ['1_loss', '2_loss', '3_loss', '4_loss', '5plus_loss']:
+                    if category in subj_result['streak_averages']:
+                        subject_streak_avgs[category].append(subj_result['streak_averages'][category])
+                        subject_trial_counts[category].append(len(subj_result['streak_data'][category]))
+                    else:
+                        # If this category doesn't exist for this subject, add empty placeholder
+                        subject_trial_counts[category].append(0)
+        
+        # Check if we have enough data to create a plot
+        if time_axis is None or not any(subject_streak_avgs.values()):
+            print("No valid loss streak data found for cross-subject analysis")
+            return None
+            
+        # Create the plot
+        plt.figure(figsize=(12, 7))
+        
+        # Define colors and labels
+        colors = {
+            '1_loss': 'blue',
+            '2_loss': 'green',
+            '3_loss': 'orange',
+            '4_loss': 'red',
+            '5plus_loss': 'purple'
+        }
+        
+        # Determine which categories to plot based on only_1_5 parameter
+        categories_to_plot = ['1_loss', '5plus_loss'] if only_1_5 else ['1_loss', '2_loss', '3_loss', '4_loss', '5plus_loss']
+        
+        # Calculate and plot the cross-subject average for each streak category
+        displayed_trials = 0
+        
+        for category in categories_to_plot:
+            if len(subject_streak_avgs[category]) > 0:
+                # Calculate mean and SEM across subjects that have this streak category
+                category_mean = np.mean(subject_streak_avgs[category], axis=0)
+                category_sem = np.std(subject_streak_avgs[category], axis=0) / np.sqrt(len(subject_streak_avgs[category]))
+                
+                # Calculate total trials for this category across subjects
+                category_trial_count = sum(subject_trial_counts[category])
+                displayed_trials += category_trial_count
+                
+                # Format label based on the category
+                if category == '1_loss':
+                    label_name = f"1 Loss (n={category_trial_count}, {len(subject_streak_avgs[category])} subjects)"
+                elif category == '5plus_loss':
+                    label_name = f"5+ Consecutive Losses (n={category_trial_count}, {len(subject_streak_avgs[category])} subjects)"
+                else:
+                    label_name = f"{category[0]} Consecutive Losses (n={category_trial_count}, {len(subject_streak_avgs[category])} subjects)"
+                
+                plt.fill_between(time_axis,
+                               category_mean - category_sem,
+                               category_mean + category_sem,
+                               color=colors[category], alpha=0.3)
+                plt.plot(time_axis, category_mean,
+                       color=colors[category], linewidth=2,
+                       label=label_name)
+        
+        # Add vertical line at cue onset
+        plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+        plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        
+        # Labels and formatting
+        plt.xlabel('Time (s)', fontsize=16)
+        plt.ylabel('ΔF/F', fontsize=16)
+        
+        # Add appropriate title based on parameters
+        missed_text = "excluding" if skipped_missed else "including"
+        plot_type = "Short (1) vs. Long (5+)" if only_1_5 else "All Categories"
+        plt.title(f'Cross-Subject LC Signal for Cumulative Loss: {plot_type}',
+                  fontsize=20)
+                  
+        plt.xlim([-pre_cue_time, post_cue_time])
+        plt.legend(loc='upper right', fontsize=12)
+        plt.tight_layout()
+        
+        # Add total trials information
+        plt.figtext(0.02, 0.02, f"Total trials analyzed: {displayed_trials} (of {total_trials})", fontsize=10,
+                bbox=dict(facecolor='white', alpha=0.8))
+        
+        # Save the figure
+        plot_cat_text = "1_and_5" if only_1_5 else "all_cats"
+        save_figure(plt.gcf(), "all_subjects", "pooled", f"loss_streaks_before_win_{missed_text}_missed_{plot_cat_text}")
+        
+        plt.show()
+        
+        # Return analysis results
+        return {
+            'subject_id': 'All',
+            'specific_subjects': specific_subjects,
+            'subject_streak_avgs': subject_streak_avgs,
+            'subject_trial_counts': subject_trial_counts,
+            'time_axis': time_axis,
+            'total_trials': total_trials,
+            'displayed_trials': displayed_trials,
+            'skipped_missed': skipped_missed,
+            'only_1_5': only_1_5
+        }
+        
+    else:
+        # Original single-subject analysis
+        return analyze_loss_streaks_before_win_single(subject_id, skipped_missed, only_1_5, behavior_df)
+
+
+def analyze_loss_streaks_before_win_single(subject_id, skipped_missed=True, only_1_5=False, behavior_df=None):
     """
     Analyze photometry signals for loss streaks of different lengths that end with a win.
     This function identifies trials that were not rewarded but where the next trial was rewarded,
