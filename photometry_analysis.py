@@ -3600,23 +3600,24 @@ def analyze_previous_outcome_effect_single(subject_id, time_split=False, behavio
     }
     return result
 
-
-def analyze_win_stay_lose_switch(subject_id, session_date=None, behavior_df=None):
+def analyze_win_stay_lose_stay(subject_id, session_date=None, behavior_df=None):
     """
-    Calculate Win-Stay, Lose-Switch statistics for a subject using all behavioral trials
-
+    Calculate Win-Stay, Lose-Stay statistics for a subject using all behavioral trials.
+    This measures perseverance (tendency to repeat choices) regardless of outcome.
+    
     Parameters:
     -----------
     subject_id : str
         The identifier for the subject
     session_date : str, optional
         Specific session to analyze. If None, analyze all sessions.
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from file
 
     Returns:
     --------
-    dict: Analysis results including WSLS counts and percentages
+    dict: Analysis results including stay counts and percentages after wins and losses
     """
-
     if behavior_df is not None:
         df = behavior_df
         if 'date' in df.columns and df['date'].dtype != str:
@@ -3628,13 +3629,12 @@ def analyze_win_stay_lose_switch(subject_id, session_date=None, behavior_df=None
             df = df[df['protocol'].str.contains('MatchingPennies', na=False)]
         except Exception as e:
             print(f"Error loading parquet data: {e}")
-        df = None  # We'll proceed without state analysis if file can't be loaded
+            df = None  # We'll proceed without state analysis if file can't be loaded
 
     # Store results
-    wsls_results = {
+    perseverance_results = {
         'win_stay_count': 0,
-        'lose_switch_count': 0,
-        'total_valid_pairs': 0,
+        'lose_stay_count': 0,
         'total_win_trials': 0,
         'total_lose_trials': 0,
         'sessions_analyzed': 0
@@ -3650,10 +3650,9 @@ def analyze_win_stay_lose_switch(subject_id, session_date=None, behavior_df=None
     else:
         sessions = [session_date]
 
-
     # Process each session
     for sess in sessions:
-        print(f"Analyzing WSLS for {subject_id}/{sess}...")
+        print(f"Analyzing perseverance for {subject_id}/{sess}...")
         
         # Get behavior data directly from parquet file
         try:
@@ -3679,9 +3678,9 @@ def analyze_win_stay_lose_switch(subject_id, session_date=None, behavior_df=None
             print(f"Session {sess} has fewer than 2 valid trials. Skipping...")
             continue
 
-        # Count WSLS occurrences
+        # Count stay behaviors after wins and losses
         win_stay_count = 0
-        lose_switch_count = 0
+        lose_stay_count = 0
         win_trials = 0
         lose_trials = 0
 
@@ -3690,31 +3689,29 @@ def analyze_win_stay_lose_switch(subject_id, session_date=None, behavior_df=None
             prev_choice = valid_choices[i - 1]
             curr_choice = valid_choices[i]
             prev_reward = valid_rewards[i - 1]
+            stayed = prev_choice == curr_choice
 
             # Count win and lose trials from previous trial
-            if prev_reward == 1:
+            if prev_reward == 1:  # Win
                 win_trials += 1
-                # Win-Stay: previous trial was rewarded and animal made same choice
-                if prev_choice == curr_choice:
+                if stayed:
                     win_stay_count += 1
-            else:
+            else:  # Loss
                 lose_trials += 1
-                # Lose-Switch: previous trial was not rewarded and animal switched choice
-                if prev_choice != curr_choice:
-                    lose_switch_count += 1
+                if stayed:
+                    lose_stay_count += 1
 
         # Add to total counts
-        wsls_results['win_stay_count'] += win_stay_count
-        wsls_results['lose_switch_count'] += lose_switch_count
-        wsls_results['total_valid_pairs'] += (len(valid_choices) - 1)  # pairs of trials
-        wsls_results['total_win_trials'] += win_trials
-        wsls_results['total_lose_trials'] += lose_trials
-        wsls_results['sessions_analyzed'] += 1
+        perseverance_results['win_stay_count'] += win_stay_count
+        perseverance_results['lose_stay_count'] += lose_stay_count
+        perseverance_results['total_win_trials'] += win_trials
+        perseverance_results['total_lose_trials'] += lose_trials
+        perseverance_results['sessions_analyzed'] += 1
 
         # Calculate session-specific percentages
         win_stay_pct = (win_stay_count / win_trials * 100) if win_trials > 0 else 0
-        lose_switch_pct = (lose_switch_count / lose_trials * 100) if lose_trials > 0 else 0
-        wsls_pct = ((win_stay_count + lose_switch_count) / (len(valid_choices) - 1) * 100) if len(valid_choices) > 1 else 0
+        lose_stay_pct = (lose_stay_count / lose_trials * 100) if lose_trials > 0 else 0
+        total_stay_pct = ((win_stay_count + lose_stay_count) / (win_trials + lose_trials) * 100) if (win_trials + lose_trials) > 0 else 0
         
         # Store session data
         session_data.append({
@@ -3722,83 +3719,272 @@ def analyze_win_stay_lose_switch(subject_id, session_date=None, behavior_df=None
             'win_stay_count': win_stay_count,
             'win_trials': win_trials,
             'win_stay_pct': win_stay_pct,
-            'lose_switch_count': lose_switch_count,
+            'lose_stay_count': lose_stay_count,
             'lose_trials': lose_trials,
-            'lose_switch_pct': lose_switch_pct,
-            'total_wsls_count': win_stay_count + lose_switch_count,
-            'total_trials': len(valid_choices) - 1,
-            'wsls_pct': wsls_pct
+            'lose_stay_pct': lose_stay_pct,
+            'total_stay_count': win_stay_count + lose_stay_count,
+            'total_trials': win_trials + lose_trials,
+            'total_stay_pct': total_stay_pct
         })
 
         # Print session-specific results
-        print(f"  Session {sess} WSLS stats:")
+        print(f"  Session {sess} perseverance stats:")
         print(f"    Win-Stay: {win_stay_count}/{win_trials} trials ({win_stay_pct:.1f}%)")
-        print(f"    Lose-Switch: {lose_switch_count}/{lose_trials} trials ({lose_switch_pct:.1f}%)")
-        print(f"    Total WSLS: {win_stay_count + lose_switch_count}/{len(valid_choices) - 1} trials ({wsls_pct:.1f}%)")
+        print(f"    Lose-Stay: {lose_stay_count}/{lose_trials} trials ({lose_stay_pct:.1f}%)")
+        print(f"    Overall Stay: {win_stay_count + lose_stay_count}/{win_trials + lose_trials} trials ({total_stay_pct:.1f}%)")
         print()
 
     # Calculate overall percentages
-    if wsls_results['total_win_trials'] > 0:
-        wsls_results['win_stay_percentage'] = (wsls_results['win_stay_count'] / wsls_results['total_win_trials']) * 100
+    if perseverance_results['total_win_trials'] > 0:
+        perseverance_results['win_stay_percentage'] = (perseverance_results['win_stay_count'] / perseverance_results['total_win_trials']) * 100
     else:
-        wsls_results['win_stay_percentage'] = 0
+        perseverance_results['win_stay_percentage'] = 0
 
-    if wsls_results['total_lose_trials'] > 0:
-        wsls_results['lose_switch_percentage'] = (wsls_results['lose_switch_count'] / wsls_results['total_lose_trials']) * 100
+    if perseverance_results['total_lose_trials'] > 0:
+        perseverance_results['lose_stay_percentage'] = (perseverance_results['lose_stay_count'] / perseverance_results['total_lose_trials']) * 100
     else:
-        wsls_results['lose_switch_percentage'] = 0
-
-    if wsls_results['total_valid_pairs'] > 0:
-        wsls_results['total_wsls_percentage'] = ((wsls_results['win_stay_count'] + wsls_results['lose_switch_count']) /
-                                                 wsls_results['total_valid_pairs']) * 100
+        perseverance_results['lose_stay_percentage'] = 0
+        
+    total_trials = perseverance_results['total_win_trials'] + perseverance_results['total_lose_trials']
+    if total_trials > 0:
+        perseverance_results['total_stay_percentage'] = ((perseverance_results['win_stay_count'] + perseverance_results['lose_stay_count']) / 
+                                                     total_trials) * 100
     else:
-        wsls_results['total_wsls_percentage'] = 0
+        perseverance_results['total_stay_percentage'] = 0
 
     # Print overall results
-    print("\n=== Win-Stay, Lose-Switch Analysis ===")
+    print("\n=== Perseverance Analysis (Stay Behavior) ===")
     print(f"Subject: {subject_id}")
-    print(f"Sessions analyzed: {wsls_results['sessions_analyzed']}")
-    print(f"Total valid trial pairs: {wsls_results['total_valid_pairs']}")
-    print(f"Win-Stay: {wsls_results['win_stay_count']}/{wsls_results['total_win_trials']} trials ({wsls_results['win_stay_percentage']:.1f}%)")
-    print(f"Lose-Switch: {wsls_results['lose_switch_count']}/{wsls_results['total_lose_trials']} trials ({wsls_results['lose_switch_percentage']:.1f}%)")
-    print(f"Overall WSLS: {wsls_results['win_stay_count'] + wsls_results['lose_switch_count']}/{wsls_results['total_valid_pairs']} trials ({wsls_results['total_wsls_percentage']:.1f}%)")
+    print(f"Sessions analyzed: {perseverance_results['sessions_analyzed']}")
+    print(f"Total valid trial pairs: {total_trials}")
+    print(f"Win-Stay: {perseverance_results['win_stay_count']}/{perseverance_results['total_win_trials']} trials ({perseverance_results['win_stay_percentage']:.1f}%)")
+    print(f"Lose-Stay: {perseverance_results['lose_stay_count']}/{perseverance_results['total_lose_trials']} trials ({perseverance_results['lose_stay_percentage']:.1f}%)")
+    print(f"Overall Stay: {perseverance_results['win_stay_count'] + perseverance_results['lose_stay_count']}/{total_trials} trials ({perseverance_results['total_stay_percentage']:.1f}%)")
 
-    # Visualization based on whether we're analyzing one or multiple sessions
-    if session_date is None and len(session_data) > 1:
-        # Multiple sessions: show WSLS, win-stay, and lose-switch percentages across sessions
-        plt.figure(figsize=(10, 6))
+        # Visualization based on whether we're analyzing one or multiple sessions
+    if perseverance_results['sessions_analyzed'] > 0:
+        plt.figure(figsize=(12, 6))
         
-        # Extract data for plotting
-        session_numbers = list(range(1, len(session_data) + 1))
-        win_stay_pcts = [s['win_stay_pct'] for s in session_data]
-        lose_switch_pcts = [s['lose_switch_pct'] for s in session_data]
-        wsls_pcts = [s['wsls_pct'] for s in session_data]
+        # If analyzing multiple sessions, plot session-by-session rates
+        if len(session_data) > 1:
+            # Extract data for plotting
+            sessions = list(range(1, perseverance_results['sessions_analyzed'] + 1))
+            win_stay_pcts = [s['win_stay_pct'] for s in session_data]
+            lose_stay_pcts = [s['lose_stay_pct'] for s in session_data]
+            total_stay_pcts = [s['total_stay_pct'] for s in session_data]
+            
+            # Plot session data
+            plt.plot(sessions, win_stay_pcts, 'o-', color='green', label='Win-Stay')
+            plt.plot(sessions, lose_stay_pcts, 'o-', color='red', label='Lose-Stay')
+            plt.plot(sessions, total_stay_pcts, 'o-', color='blue', linewidth=2, label='Overall Stay')
+            
+            # Add reference line at 50%
+            plt.axhline(y=50, color='gray', linestyle='--', alpha=0.7)
+            
+            # Formatting
+            plt.xlabel('Session Number')
+            plt.ylabel('Stay Percentage (%)')
+            plt.title(f'Perseverance Across Sessions {subject_id}')
+            plt.xticks(sessions)
+            plt.ylim(0, 100)
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+        else:
+            # For single session, create simple line chart with the three values
+            categories = ['Win-Stay', 'Lose-Stay', 'Overall']
+            stay_percentages = [
+                perseverance_results['win_stay_percentage'],
+                perseverance_results['lose_stay_percentage'],
+                perseverance_results['total_stay_percentage']
+            ]
+            
+            plt.plot(['Win-Stay', 'Lose-Stay', 'Overall'], stay_percentages, 'o-', color='blue', linewidth=2)
+            plt.ylabel('Stay Percentage (%)')
+            plt.title('Perseverance Analysis')
+            plt.ylim(0, 100)
+            plt.grid(True, axis='y', alpha=0.3)
+            
+            # Add data points to the graph
+            for i, (pct, count, total) in enumerate(zip(
+                stay_percentages[:2],  # Just win-stay and lose-stay
+                [perseverance_results['win_stay_count'], perseverance_results['lose_stay_count']],
+                [perseverance_results['total_win_trials'], perseverance_results['total_lose_trials']])):
+                plt.annotate(f'{count}/{total}\n({pct:.1f}%)', 
+                             (i, pct), 
+                             textcoords="offset points", 
+                             xytext=(0,10), 
+                             ha='center')
+            
+            # Add overall percentage
+            plt.annotate(f"{perseverance_results['win_stay_count'] + perseverance_results['lose_stay_count']}/"
+                         f"{total_trials}\n({perseverance_results['total_stay_percentage']:.1f}%)",
+                         (2, perseverance_results['total_stay_percentage']),
+                         textcoords="offset points", 
+                         xytext=(0,10), 
+                         ha='center')
+            
+        plt.tight_layout()
         
-        # Plot win-stay, lose-switch, and overall WSLS percentages
-        plt.plot(session_numbers, win_stay_pcts, 'o-', color='green', label='Win-Stay %')
-        plt.plot(session_numbers, lose_switch_pcts, 'o-', color='orange', label='Lose-Switch %')
-        plt.plot(session_numbers, wsls_pcts, 'o-', color='blue', linewidth=2, label='Overall WSLS %')
-        
-        # Add reference line at 50%
-        plt.axhline(y=50, color='red', linestyle='--', alpha=0.7)
-        
-        # Formatting
-        plt.xlabel('Session Number')
-        plt.ylabel('Percentage (%)')
-        plt.title(f'WSLS Analysis Across Sessions: {subject_id}')
-        plt.xticks(session_numbers)
-        plt.ylim(0, 100)
-        plt.grid(True, alpha=0.3)
-        plt.legend()
-
-        # Save figure
-        save_figure(plt.gcf(), subject_id, "all_sessions", "wsls_across_sessions")
+        # Save the figure
+        save_figure(plt.gcf(), subject_id, "pooled", "perseverance_analysis")
         plt.show()
     
-    # Store session data in results
-    wsls_results['session_data'] = session_data
-    return wsls_results
-
+    perseverance_results['session_data'] = session_data
+    return perseverance_results
+        
+def analyze_group_perseverance(subject_ids=None, behavior_df=None, save_fig=True):
+    """
+    Calculate and plot average win-stay, lose-stay, and overall stay percentages
+    across multiple subjects. Treats each animal as one data point per session.
+    
+    Parameters:
+    -----------
+    subject_ids : list, optional
+        List of subject IDs to include. If None, uses default list.
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from file
+    save_fig : bool, optional
+        Whether to save the generated figure
+        
+    Returns:
+    --------
+    dict: Dictionary with perseverance data across subjects
+    """
+    # Default subjects if not provided
+    if subject_ids is None:
+        subject_ids = ["JOA-M-0022", "JOA-M-0023", "JOA-M-0024", "JOA-M-0025", "JOA-M-0026"]
+        print(f"Using default subject list: {subject_ids}")
+    
+    # Store results for each subject
+    all_subject_data = {}
+    max_sessions = 0
+    
+    # Process each subject
+    for subject_id in subject_ids:
+        print(f"Processing {subject_id}...")
+        
+        # Analyze perseverance for this subject
+        result = analyze_win_stay_lose_stay(subject_id, behavior_df=behavior_df)
+        
+        if result and 'session_data' in result and result['session_data']:
+            # Store session data
+            all_subject_data[subject_id] = result['session_data']
+            
+            # Track maximum number of sessions
+            max_sessions = max(max_sessions, len(result['session_data']))
+    
+    if not all_subject_data:
+        print("No valid data found for any subjects")
+        return None
+    
+    # Prepare data structure for averaging
+    session_averages = {
+        'win_stay': [[] for _ in range(max_sessions)],
+        'lose_stay': [[] for _ in range(max_sessions)],
+        'total_stay': [[] for _ in range(max_sessions)]
+    }
+    
+    # Collect data for each session across subjects
+    for subject_id, sessions in all_subject_data.items():
+        for i, session_data in enumerate(sessions):
+            session_averages['win_stay'][i].append(session_data['win_stay_pct'])
+            session_averages['lose_stay'][i].append(session_data['lose_stay_pct'])
+            session_averages['total_stay'][i].append(session_data['total_stay_pct'])
+    
+    # Calculate means and SEMs for each session
+    win_stay_means = []
+    lose_stay_means = []
+    total_stay_means = []
+    win_stay_sems = []
+    lose_stay_sems = []
+    total_stay_sems = []
+    subjects_per_session = []
+    
+    for i in range(max_sessions):
+        # Only include sessions with at least 3 subjects' data
+        win_data = [x for x in session_averages['win_stay'][i] if not np.isnan(x)]
+        lose_data = [x for x in session_averages['lose_stay'][i] if not np.isnan(x)]
+        total_data = [x for x in session_averages['total_stay'][i] if not np.isnan(x)]
+        
+        n_subjects = len(win_data)
+        subjects_per_session.append(n_subjects)
+        
+        # Only calculate stats if we have enough data
+        if n_subjects >= 3:
+            win_stay_means.append(np.mean(win_data))
+            lose_stay_means.append(np.mean(lose_data))
+            total_stay_means.append(np.mean(total_data))
+            
+            win_stay_sems.append(np.std(win_data) / np.sqrt(n_subjects))
+            lose_stay_sems.append(np.std(lose_data) / np.sqrt(n_subjects))
+            total_stay_sems.append(np.std(total_data) / np.sqrt(n_subjects))
+        else:
+            # Stop calculating when fewer than 3 subjects have data
+            break
+    
+    # Plot the results
+    valid_sessions = len(win_stay_means)
+    if valid_sessions > 0:
+        plt.figure(figsize=(14, 8))
+        
+        # Create x values for sessions
+        sessions = list(range(1, valid_sessions + 1))
+        
+        # Plot individual subject data with thinner, semi-transparent lines
+        for subject_id, subject_sessions in all_subject_data.items():
+            x_vals = range(1, min(len(subject_sessions) + 1, valid_sessions + 1))
+            
+            # Only plot up to the valid session limit
+            win_vals = [s['win_stay_pct'] for s in subject_sessions[:valid_sessions]]
+            lose_vals = [s['lose_stay_pct'] for s in subject_sessions[:valid_sessions]]
+            total_vals = [s['total_stay_pct'] for s in subject_sessions[:valid_sessions]]
+            
+            plt.plot(x_vals, win_vals, 'o-', color='green', alpha=0.15, linewidth=0.7)
+            plt.plot(x_vals, lose_vals, 'o-', color='red', alpha=0.15, linewidth=0.7)
+            plt.plot(x_vals, total_vals, 'o-', color='blue', alpha=0.15, linewidth=0.7)
+        
+        # Plot the group averages with thicker lines and SEM
+        plt.errorbar(sessions, win_stay_means, yerr=win_stay_sems, 
+                     color='green', linewidth=2, label='Win-Stay')
+        plt.errorbar(sessions, lose_stay_means, yerr=lose_stay_sems, 
+                     color='red', linewidth=2, label='Lose-Stay')
+        plt.errorbar(sessions, total_stay_means, yerr=total_stay_sems, 
+                     color='blue', linewidth=2, label='Overall Stay')
+        
+        # Add reference line at 50%
+        plt.axhline(y=50, color='gray', linestyle='--', alpha=0.7)
+        
+        # Formatting
+        plt.xlabel('Session Number', fontsize=14)
+        plt.ylabel('Stay Percentage (%)', fontsize=14)
+        plt.title(f'Group Perseverance Analysis Across Sessions (n={len(subject_ids)} subjects)', 
+                  fontsize=16)
+        plt.xticks(sessions)
+        plt.ylim(0, 100)
+        plt.grid(True, alpha=0.3)
+        plt.legend(fontsize=12)
+        
+        plt.tight_layout()
+        
+        # Save figure if requested
+        if save_fig:
+            save_figure(plt.gcf(), "all_subjects", "group", "perseverance_analysis")
+        
+        plt.show()
+    
+    # Return analysis results
+    return {
+        'subjects': subject_ids,
+        'max_sessions': max_sessions,
+        'win_stay_means': win_stay_means,
+        'lose_stay_means': lose_stay_means, 
+        'total_stay_means': total_stay_means,
+        'win_stay_sems': win_stay_sems,
+        'lose_stay_sems': lose_stay_sems,
+        'total_stay_sems': total_stay_sems,
+        'subjects_per_session': subjects_per_session,
+        'valid_sessions': valid_sessions
+    }
 
 def analyze_loss_streaks_before_win(subject_id="All", skipped_missed=True, only_1_5=False, behavior_df=None, specific_subjects=None):
     """

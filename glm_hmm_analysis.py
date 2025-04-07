@@ -7,7 +7,7 @@ import warnings
 import pandas as pd
 import scipy.stats
 from scipy.stats import chi2_contingency, fisher_exact
-from photometry_analysis import calculate_sem, save_figure, process_session, plot_session_results, check_saved_pooled_results, save_pooled_results, analyze_pooled_data
+from photometry_analysis import calculate_sem, save_figure, process_session, plot_session_results, check_saved_pooled_results, save_pooled_results, analyze_pooled_data, load_filtered_behavior_data
 
 # Suppress deprecation warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -27,8 +27,311 @@ CODE_VERSION = "1.0.6"  # Increment this when making analysis changes --> will f
 _SESSION_CACHE = {}
 
 
+def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=None, behavior_df=None):
+    """
+    Analyze behavioral states from GLM-HMM analysis across trials.
+    
+    Parameters:
+    -----------
+    subjid : str
+        Subject ID to analyze, or "All" for cross-subject analysis
+    win_loss : bool, optional (default=False)
+        If True, separate analysis by previous trial outcome (win vs loss)
+    specific_subjects : list, optional
+        List of subject IDs to include if subjid="All"
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from file
+        
+    Returns:
+    --------
+    dict: Analysis results
+    """
+    if subjid == "All":
+        if specific_subjects is None:
+            # Default list of subjects
+            specific_subjects = ["JOA-M-0022", "JOA-M-0023", "JOA-M-0024", "JOA-M-0025", "JOA-M-0026"]
+            print(f"Using default subject list: {specific_subjects}")
+        
+        # Make sure behavior_df is loaded
+        if behavior_df is None:
+            print("Loading behavior data for all subjects...")
+            behavior_df = load_filtered_behavior_data("MatchingPennies")
+        
+        # Container for subject-level results
+        subject_results = []
+        
+        # Process each subject individually
+        for subject in specific_subjects:
+            print(f"Processing subject {subject} for behavioral state analysis...")
+            try:
+                # Get individual subject results by calling original function
+                subject_result = analyze_behavioral_states_single(subject, win_loss, behavior_df=behavior_df)
+                if subject_result:
+                    subject_results.append(subject_result)
+            except Exception as e:
+                print(f"Error processing subject {subject}: {e}")
+        
+        if not subject_results:
+            print("No valid subjects found for cross-subject analysis")
+            return None
+            
+        # Average across subjects
+        if win_loss:
+            # For win-loss analysis we need to collect data separately for win and loss trials
+            stochastic_win_data = []
+            stochastic_loss_data = []
+            biased_win_data = []
+            biased_loss_data = []
+            
+            time_axis = None
+            
+            # Extract data from each subject's results
+            for result in subject_results:
+                if time_axis is None and 'time_axis' in result:
+                    time_axis = result['time_axis']
+                
+                # Extract win/loss data for each state
+                if ('stochastic' in result and 
+                    result['stochastic'] is not None and 
+                    'win_avg' in result['stochastic'] and 
+                    result['stochastic']['win_avg'] is not None):
+                    stochastic_win_data.append(result['stochastic']['win_avg'])
+                
+                if ('stochastic' in result and 
+                    result['stochastic'] is not None and 
+                    'loss_avg' in result['stochastic'] and 
+                    result['stochastic']['loss_avg'] is not None):
+                    stochastic_loss_data.append(result['stochastic']['loss_avg'])
+                    
+                if ('biased' in result and 
+                    result['biased'] is not None and 
+                    'win_avg' in result['biased'] and 
+                    result['biased']['win_avg'] is not None):
+                    biased_win_data.append(result['biased']['win_avg'])
+                    
+                if ('biased' in result and 
+                    result['biased'] is not None and 
+                    'loss_avg' in result['biased'] and 
+                    result['biased']['loss_avg'] is not None):
+                    biased_loss_data.append(result['biased']['loss_avg'])
+            
+            if time_axis is None or (not stochastic_win_data and not stochastic_loss_data and 
+                                    not biased_win_data and not biased_loss_data):
+                print("No valid win/loss data found for cross-subject analysis")
+                return None
+                
+            # Create the plot
+            plt.figure(figsize=(12, 7))
+            
+            # Define colors and styles for win/loss conditions
+            colors = {
+                'stochastic_win': 'mediumblue',
+                'stochastic_loss': 'royalblue',
+                'biased_win': 'darkred',
+                'biased_loss': 'indianred'
+            }
+            
+            linestyles = {
+                'stochastic_win': '-',
+                'stochastic_loss': '--',
+                'biased_win': '-',
+                'biased_loss': '--'
+            }
+            
+            # Plot stochastic win data if available
+            if stochastic_win_data:
+                # Calculate mean and SEM across subjects
+                avg = np.mean(stochastic_win_data, axis=0)
+                sem = np.std(stochastic_win_data, axis=0) / np.sqrt(len(stochastic_win_data))
+                
+                plt.fill_between(time_axis,
+                                avg - sem,
+                                avg + sem,
+                                color=colors['stochastic_win'], alpha=0.3)
+                plt.plot(time_axis, avg,
+                        color=colors['stochastic_win'],
+                        linestyle=linestyles['stochastic_win'],
+                        linewidth=2,
+                        label=f"Stochastic Win (n={len(stochastic_win_data)} subjects)")
+                        
+            # Plot stochastic loss data if available
+            if stochastic_loss_data:
+                # Calculate mean and SEM across subjects
+                avg = np.mean(stochastic_loss_data, axis=0)
+                sem = np.std(stochastic_loss_data, axis=0) / np.sqrt(len(stochastic_loss_data))
+                
+                plt.fill_between(time_axis,
+                                avg - sem,
+                                avg + sem,
+                                color=colors['stochastic_loss'], alpha=0.3)
+                plt.plot(time_axis, avg,
+                        color=colors['stochastic_loss'],
+                        linestyle=linestyles['stochastic_loss'],
+                        linewidth=2,
+                        label=f"Stochastic Loss (n={len(stochastic_loss_data)} subjects)")
+                        
+            # Plot biased win data if available
+            if biased_win_data:
+                # Calculate mean and SEM across subjects
+                avg = np.mean(biased_win_data, axis=0)
+                sem = np.std(biased_win_data, axis=0) / np.sqrt(len(biased_win_data))
+                
+                plt.fill_between(time_axis,
+                                avg - sem,
+                                avg + sem,
+                                color=colors['biased_win'], alpha=0.3)
+                plt.plot(time_axis, avg,
+                        color=colors['biased_win'],
+                        linestyle=linestyles['biased_win'],
+                        linewidth=2,
+                        label=f"Biased Win (n={len(biased_win_data)} subjects)")
+                        
+            # Plot biased loss data if available
+            if biased_loss_data:
+                # Calculate mean and SEM across subjects
+                avg = np.mean(biased_loss_data, axis=0)
+                sem = np.std(biased_loss_data, axis=0) / np.sqrt(len(biased_loss_data))
+                
+                plt.fill_between(time_axis,
+                                avg - sem,
+                                avg + sem,
+                                color=colors['biased_loss'], alpha=0.3)
+                plt.plot(time_axis, avg,
+                        color=colors['biased_loss'],
+                        linestyle=linestyles['biased_loss'],
+                        linewidth=2,
+                        label=f"Biased Loss (n={len(biased_loss_data)} subjects)")
+            
+            # Add reference lines
+            plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+            plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+            
+            # Add labels and title
+            plt.xlabel('Time (s)', fontsize=12)
+            plt.ylabel('ΔF/F', fontsize=12)
+            plt.title(f'Cross-Subject Photometry by Behavioral State (Win-Loss)', fontsize=14)
+            plt.xlim([-pre_cue_time, post_cue_time])
+            plt.legend(loc='upper right')
+            plt.tight_layout()
+            
+            # Save the figure
+            save_figure(plt.gcf(), "all_subjects", "pooled", "behavioral_states_winloss")
+            
+            plt.show()
+            
+            return {
+                'subjid': 'All',
+                'specific_subjects': specific_subjects,
+                'win_loss': win_loss,
+                'n_subjects': len(subject_results),
+                'stochastic_win_data': stochastic_win_data,
+                'stochastic_loss_data': stochastic_loss_data,
+                'biased_win_data': biased_win_data,
+                'biased_loss_data': biased_loss_data,
+                'time_axis': time_axis
+            }
+            
+        else:
+            # For regular state analysis (not win-loss)
+            # Extract data for each state from all subjects
+            stochastic_data = []
+            biased_data = []
+            time_axis = None
+            
+            # Extract data from each subject's results
+            for result in subject_results:
+                if time_axis is None and 'time_axis' in result:
+                    time_axis = result['time_axis']
+                
+                # Extract average data for each state
+                if ('stochastic' in result and 
+                    result['stochastic'] is not None and 
+                    'avg' in result['stochastic'] and 
+                    result['stochastic']['avg'] is not None):
+                    stochastic_data.append(result['stochastic']['avg'])
+                
+                if ('biased' in result and 
+                    result['biased'] is not None and 
+                    'avg' in result['biased'] and 
+                    result['biased']['avg'] is not None):
+                    biased_data.append(result['biased']['avg'])
+            
+            if time_axis is None or (not stochastic_data and not biased_data):
+                print("No valid data found for cross-subject analysis")
+                return None
+            
+            # Create the plot
+            plt.figure(figsize=(12, 7))
+            
+            # Define colors for states
+            colors = {
+                'stochastic': 'blue',
+                'biased': 'red'
+            }
+            
+            # Plot stochastic data if available
+            if stochastic_data:
+                # Calculate mean and SEM across subjects
+                avg = np.mean(stochastic_data, axis=0)
+                sem = np.std(stochastic_data, axis=0) / np.sqrt(len(stochastic_data))
+                
+                plt.fill_between(time_axis,
+                                avg - sem,
+                                avg + sem,
+                                color=colors['stochastic'], alpha=0.3)
+                plt.plot(time_axis, avg,
+                        color=colors['stochastic'],
+                        linewidth=2,
+                        label=f"Stochastic (n={len(stochastic_data)} subjects)")
+            
+            # Plot biased data if available
+            if biased_data:
+                # Calculate mean and SEM across subjects
+                avg = np.mean(biased_data, axis=0)
+                sem = np.std(biased_data, axis=0) / np.sqrt(len(biased_data))
+                
+                plt.fill_between(time_axis,
+                                avg - sem,
+                                avg + sem,
+                                color=colors['biased'], alpha=0.3)
+                plt.plot(time_axis, avg,
+                        color=colors['biased'],
+                        linewidth=2,
+                        label=f"Biased (n={len(biased_data)} subjects)")
+            
+            # Add reference lines
+            plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+            plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+            
+            # Add labels and title
+            plt.xlabel('Time (s)', fontsize=12)
+            plt.ylabel('ΔF/F', fontsize=12)
+            plt.title(f'Cross-Subject Photometry by Behavioral State', fontsize=14)
+            plt.xlim([-pre_cue_time, post_cue_time])
+            plt.legend(loc='upper right')
+            plt.tight_layout()
+            
+            # Save the figure
+            save_figure(plt.gcf(), "all_subjects", "pooled", "behavioral_states_combined")
+            
+            plt.show()
+            
+            return {
+                'subjid': 'All',
+                'specific_subjects': specific_subjects,
+                'win_loss': win_loss,
+                'n_subjects': len(subject_results),
+                'stochastic_data': stochastic_data,
+                'biased_data': biased_data,
+                'time_axis': time_axis
+            }
+    
+    else:
+        # Original single-subject analysis (call original function)
+        return analyze_behavioral_states_single(subjid, win_loss, behavior_df=behavior_df)
 
-def analyze_behavioral_states(subject_id, win_loss=False, threshold=0.8, behavior_df=None):
+
+def analyze_behavioral_states_single(subject_id, win_loss=False, threshold=0.8, behavior_df=None):
     """
     Analyze photometry signals based on behavioral states (stochastic vs biased)
 
@@ -370,6 +673,21 @@ def analyze_behavioral_states(subject_id, win_loss=False, threshold=0.8, behavio
 
     plt.show()
 
+    return {
+    'subject_id': subject_id,
+    'threshold': threshold,
+    'time_axis': time_axis,
+    'stochastic': state_data['stochastic'],
+    'biased': state_data['biased'],
+    'stochastic_count': stochastic_count, 
+    'biased_count': biased_count,
+    'uncertain_count': uncertain_count,
+    'total_non_m_trials': total_non_m_trials,
+    'stochastic_pct': stochastic_pct,
+    'biased_pct': biased_pct,
+    'uncertain_pct': uncertain_pct
+        }
+
 
 def plot_state_probabilities(subject_id, session_date=None, behavior_df=None):
     """
@@ -565,7 +883,217 @@ def plot_state_probabilities(subject_id, session_date=None, behavior_df=None):
     return None
 
 
-def analyze_previous_outcome_effect_by_state(subject_id, threshold=0.8, behavior_df=None):
+def analyze_previous_outcome_effect_by_state(subject_id, threshold=0.8, specific_subjects=None, behavior_df=None):
+    """
+    Analyze photometry signals based on previous and current trial outcomes,
+    separated by behavioral state (stochastic vs biased).
+
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject, or "All" for cross-subject analysis
+    threshold : float, optional (default=0.8)
+        Probability threshold for assigning trials to a state
+    specific_subjects : list, optional
+        List of subject IDs to include if subject_id="All"
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from file
+
+    Returns:
+    --------
+    dict: Analysis results including state-specific previous outcome effects
+    """
+    if subject_id == "All":
+        if specific_subjects is None:
+            # Default list of subjects
+            specific_subjects = ["JOA-M-0022", "JOA-M-0023", "JOA-M-0024", "JOA-M-0025", "JOA-M-0026"]
+            print(f"Using default subject list: {specific_subjects}")
+        
+        # Make sure behavior_df is loaded
+        if behavior_df is None:
+            print("Loading behavior data for all subjects...")
+            behavior_df = load_filtered_behavior_data("MatchingPennies")
+        
+        # Container for subject-level results
+        subject_results = []
+        
+        # Process each subject individually
+        for subj in specific_subjects:
+            print(f"Processing subject {subj} for previous outcome effect analysis...")
+            try:
+                # Process individual subject
+                subj_result = analyze_previous_outcome_effect_by_state_single(subj, threshold, behavior_df=behavior_df)
+                if subj_result:
+                    subject_results.append(subj_result)
+            except Exception as e:
+                print(f"Error processing subject {subj}: {e}")
+        
+        if not subject_results:
+            print("No valid subjects found for cross-subject analysis")
+            return None
+        
+        # Store time axis from first subject
+        time_axis = subject_results[0]['time_axis'] if 'time_axis' in subject_results[0] else None
+        
+        # Prepare containers for cross-subject data
+        cross_subject_data = {
+            'stochastic': {
+                'prev_win_curr_win': [],  # Each subject's average will be one entry
+                'prev_win_curr_loss': [],
+                'prev_loss_curr_win': [],
+                'prev_loss_curr_loss': []
+            },
+            'biased': {
+                'prev_win_curr_win': [],
+                'prev_win_curr_loss': [],
+                'prev_loss_curr_win': [],
+                'prev_loss_curr_loss': []
+            }
+        }
+        
+        # Group data by subject
+        for result in subject_results:
+            if result and 'condition_data' in result:
+                for state in ['stochastic', 'biased']:
+                    for condition in cross_subject_data[state].keys():
+                        if (state in result['condition_data'] and 
+                            condition in result['condition_data'][state] and 
+                            'avg' in result['condition_data'][state][condition] and
+                            result['condition_data'][state][condition]['avg'] is not None and
+                            len(result['condition_data'][state][condition]['avg']) > 0):
+                            # Add this subject's average to our collection
+                            cross_subject_data[state][condition].append(result['condition_data'][state][condition]['avg'])
+        
+        # Check if we have enough data to create plots
+        if time_axis is None:
+            print("No time axis found for cross-subject analysis")
+            return None
+        
+        # Calculate cross-subject averages and SEMs
+        cross_subject_averages = {
+            'stochastic': {},
+            'biased': {}
+        }
+        
+        for state in ['stochastic', 'biased']:
+            for condition in cross_subject_data[state].keys():
+                if cross_subject_data[state][condition]:
+                    avg = np.mean(cross_subject_data[state][condition], axis=0)
+                    sem = np.std(cross_subject_data[state][condition], axis=0) / np.sqrt(len(cross_subject_data[state][condition]))
+                    count = len(cross_subject_data[state][condition])
+                    
+                    cross_subject_averages[state][condition] = {
+                        'avg': avg,
+                        'sem': sem,
+                        'count': count
+                    }
+                else:
+                    cross_subject_averages[state][condition] = {
+                        'avg': None,
+                        'sem': None,
+                        'count': 0
+                    }
+        
+        # Create the plot
+        fig, axes = plt.subplots(1, 2, figsize=(18, 7), sharey=True)
+        
+        # Define colors and labels
+        colors = {
+            'prev_win_curr_win': 'darkgreen',
+            'prev_win_curr_loss': 'firebrick',
+            'prev_loss_curr_win': 'mediumseagreen',
+            'prev_loss_curr_loss': 'indianred'
+        }
+        
+        condition_labels = {
+            'prev_win_curr_win': 'Win→Win',
+            'prev_win_curr_loss': 'Win→Loss',
+            'prev_loss_curr_win': 'Loss→Win',
+            'prev_loss_curr_loss': 'Loss→Loss'
+        }
+        
+        # Find global min/max for consistent y scaling
+        y_min = float('inf')
+        y_max = float('-inf')
+        
+        for state in ['stochastic', 'biased']:
+            for condition in cross_subject_averages[state].keys():
+                if cross_subject_averages[state][condition]['avg'] is not None:
+                    avg = cross_subject_averages[state][condition]['avg']
+                    sem = cross_subject_averages[state][condition]['sem']
+                    y_min = min(y_min, np.min(avg - sem))
+                    y_max = max(y_max, np.max(avg + sem))
+        
+        # Add some padding to y limits
+        y_range = y_max - y_min
+        y_min -= 0.1 * y_range
+        y_max += 0.1 * y_range
+        
+        # Plot each state in its subplot
+        for i, state in enumerate(['stochastic', 'biased']):
+            ax = axes[i]
+            
+            for condition, color in colors.items():
+                if cross_subject_averages[state][condition]['avg'] is not None:
+                    avg = cross_subject_averages[state][condition]['avg']
+                    sem = cross_subject_averages[state][condition]['sem']
+                    count = cross_subject_averages[state][condition]['count']
+                    
+                    # Only plot if we have data
+                    if len(avg) > 0 and count > 0:
+                        ax.fill_between(time_axis,
+                                        avg - sem,
+                                        avg + sem,
+                                        color=color, alpha=0.3)
+                        ax.plot(time_axis, avg,
+                                color=color, linewidth=2,
+                                label=f'{condition_labels[condition]} (n={count} subjects)')
+            
+            # Add vertical line at cue onset
+            ax.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+            ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+            
+            # Set the same y-limits for both subplots
+            ax.set_ylim(y_min, y_max)
+            
+            # Labels and formatting
+            ax.set_xlabel('Time (s)', fontsize=12)
+            if i == 0:
+                ax.set_ylabel('ΔF/F', fontsize=12)
+            
+            ax.set_title(f'{state.capitalize()} State', fontsize=14)
+            ax.set_xlim([-pre_cue_time, post_cue_time])
+            ax.legend(loc='upper right', fontsize=10)
+            ax.grid(True, alpha=0.2)
+        
+        # Add main title
+        plt.suptitle(f'Cross-Subject Previous Outcome Effect by Behavioral State (n={len(subject_results)} subjects)',
+                     fontsize=16, y=0.98)
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.95])  # Make room for the subtitle
+        
+        # Save the figure
+        save_figure(fig, "all_subjects", "pooled", f"previous_outcome_by_state_thresh{threshold}")
+        
+        plt.show()
+        
+        # Return analysis results
+        return {
+            'subject_id': 'All',
+            'specific_subjects': specific_subjects,
+            'n_subjects': len(subject_results),
+            'threshold': threshold,
+            'time_axis': time_axis,
+            'cross_subject_averages': cross_subject_averages,
+            'cross_subject_data': cross_subject_data,
+        }
+    
+    else:
+        # Original single-subject analysis
+        return analyze_previous_outcome_effect_by_state_single(subject_id, threshold, behavior_df=behavior_df)
+
+
+def analyze_previous_outcome_effect_by_state_single(subject_id, threshold=0.8, behavior_df=None):
     """
     Analyze photometry signals based on previous and current trial outcomes,
     separated by behavioral state (stochastic vs biased).
@@ -904,6 +1432,20 @@ def analyze_previous_outcome_effect_by_state(subject_id, threshold=0.8, behavior
     save_figure(fig, subject_id, "pooled", f"previous_outcome_by_state_thresh{threshold}")
 
     plt.show()
+    return {
+        'subject_id': subject_id,
+        'threshold': threshold,
+        'time_axis': time_axis,
+        'stochastic_count': stochastic_count,
+        'biased_count': biased_count,
+        'uncertain_count': uncertain_count,
+        'total_non_m_trials': total_non_m_trials,
+        'stochastic_pct': stochastic_pct,
+        'biased_pct': biased_pct,
+        'uncertain_pct': uncertain_pct,
+        'condition_data': condition_data,
+        'session_dates': session_dates
+    }
 
 
 def analyze_signal_quartiles_by_state(subject_id, signal_window='pre_cue', condition='loss', plot_verification=True, threshold=0.8, behavior_df=None):
@@ -1762,6 +2304,233 @@ def analyze_loss_streaks_by_state_photometry(subject_id, threshold=0.8, only_1_3
     Parameters:
     -----------
     subject_id : str
+        The identifier for the subject, or "All" for cross-subject analysis
+    threshold : float, optional (default=0.8)
+        Probability threshold for assigning trials to a state
+    only_1_3 : bool, optional (default=False)
+        If True, group all streaks of 3+ losses together
+        If False, maintain separate categories for 3, 4, and 5+ loss streaks
+    plot_verification : bool, optional (default=True)
+        Whether to create verification plots showing individual trials
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from file
+
+    Returns:
+    --------
+    dict: Analysis results including streak-specific photometry signals by state
+    """
+    if subject_id == "All":
+        if behavior_df is None:
+            print("Loading behavior data for all subjects...")
+            behavior_df = load_filtered_behavior_data("MatchingPennies")
+        
+        # Default list of subjects
+        specific_subjects = ["JOA-M-0022", "JOA-M-0023", "JOA-M-0024", "JOA-M-0025", "JOA-M-0026"]
+        print(f"Using default subject list: {specific_subjects}")
+        
+        # Container for subject-level results
+        subject_results = []
+        
+        # Process each subject individually
+        for subj in specific_subjects:
+            print(f"Processing subject {subj} for loss streak analysis...")
+            try:
+                # Process individual subject
+                subj_result = analyze_loss_streaks_by_state_photometry_single(subj, threshold, only_1_3, 
+                                                                             plot_verification=False, 
+                                                                             behavior_df=behavior_df)
+                if subj_result:
+                    subject_results.append(subj_result)
+            except Exception as e:
+                print(f"Error processing subject {subj}: {e}")
+        
+        if not subject_results:
+            print("No valid subjects found for cross-subject analysis")
+            return None
+        
+        # Define streak categories based on only_1_3 parameter
+        if only_1_3:
+            streak_categories = ['1_loss', '3plus_loss']
+        else:
+            streak_categories = ['1_loss', '2_loss', '3_loss', '4_loss', '5plus_loss']
+        
+        # Store time axis from first subject
+        time_axis = None
+        for result in subject_results:
+            if 'time_axis' in result and result['time_axis'] is not None:
+                time_axis = result['time_axis']
+                break
+        
+        if time_axis is None:
+            print("No time axis found in subject results")
+            return None
+        
+        # Collect streak averages for each subject by state and category
+        cross_subject_data = {
+            'stochastic': {cat: [] for cat in streak_categories},
+            'biased': {cat: [] for cat in streak_categories}
+        }
+        
+        for result in subject_results:
+            if 'streak_averages' not in result:
+                continue
+                
+            for state in ['stochastic', 'biased']:
+                for cat in streak_categories:
+                    if (cat in result['streak_averages'][state] and 
+                        result['streak_averages'][state][cat]['avg'] is not None):
+                        cross_subject_data[state][cat].append(result['streak_averages'][state][cat]['avg'])
+        
+        # Calculate cross-subject averages and SEMs
+        cross_subject_averages = {
+            'stochastic': {},
+            'biased': {}
+        }
+        
+        for state in ['stochastic', 'biased']:
+            for cat in streak_categories:
+                if cross_subject_data[state][cat]:
+                    avg = np.mean(cross_subject_data[state][cat], axis=0)
+                    sem = np.std(cross_subject_data[state][cat], axis=0) / np.sqrt(len(cross_subject_data[state][cat]))
+                    count = len(cross_subject_data[state][cat])
+                    
+                    cross_subject_averages[state][cat] = {
+                        'avg': avg,
+                        'sem': sem,
+                        'count': count
+                    }
+                else:
+                    cross_subject_averages[state][cat] = {
+                        'avg': None,
+                        'sem': None,
+                        'count': 0
+                    }
+        
+        # Create the visualization
+        if plot_verification:
+            # Create a 2x1 subplot figure
+            fig, axes = plt.subplots(1, 2, figsize=(18, 7), sharey=True)
+            
+            # Define colors
+            if only_1_3:
+                colors = {
+                    '1_loss': 'blue',
+                    '2_loss': 'green',
+                    '3plus_loss': 'red'
+                }
+                labels = {
+                    '1_loss': '1 Loss',
+                    '2_loss': '2 Losses',
+                    '3plus_loss': '3+ Losses'
+                }
+            else:
+                colors = {
+                    '1_loss': 'blue',
+                    '2_loss': 'green',
+                    '3_loss': 'orange',
+                    '4_loss': 'red',
+                    '5plus_loss': 'purple'
+                }
+                labels = {
+                    '1_loss': '1 Loss',
+                    '2_loss': '2 Losses',
+                    '3_loss': '3 Losses',
+                    '4_loss': '4 Losses',
+                    '5plus_loss': '5+ Losses'
+                }
+            
+            # Find global min/max for consistent y scaling
+            y_min = float('inf')
+            y_max = float('-inf')
+            
+            for state in ['stochastic', 'biased']:
+                for cat in streak_categories:
+                    if cross_subject_averages[state][cat]['avg'] is not None:
+                        avg = cross_subject_averages[state][cat]['avg']
+                        sem = cross_subject_averages[state][cat]['sem']
+                        y_min = min(y_min, np.min(avg - sem))
+                        y_max = max(y_max, np.max(avg + sem))
+            
+            # Add some padding to y limits
+            y_range = y_max - y_min
+            y_min -= 0.1 * y_range
+            y_max += 0.1 * y_range
+            
+            # Plot each state in its subplot
+            for i, state in enumerate(['stochastic', 'biased']):
+                ax = axes[i]
+                
+                state_subject_count = sum(cross_subject_averages[state][cat]['count'] > 0 
+                                         for cat in streak_categories)
+                
+                for cat in streak_categories:
+                    if cross_subject_averages[state][cat]['avg'] is not None:
+                        avg = cross_subject_averages[state][cat]['avg']
+                        sem = cross_subject_averages[state][cat]['sem']
+                        count = cross_subject_averages[state][cat]['count']
+                        
+                        # Only plot if we have data
+                        if len(avg) > 0 and count > 0:
+                            ax.fill_between(time_axis,
+                                           avg - sem,
+                                           avg + sem,
+                                           color=colors[cat], alpha=0.3)
+                            ax.plot(time_axis, avg,
+                                   color=colors[cat], linewidth=2,
+                                   label=f'{labels[cat]} → Win (n={count} subjects)')
+                
+                # Add vertical line at cue onset
+                ax.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+                ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+                
+                # Set the same y-limits for both subplots
+                ax.set_ylim(y_min, y_max)
+                
+                # Labels and formatting
+                ax.set_xlabel('Time (s)', fontsize=12)
+                if i == 0:
+                    ax.set_ylabel('ΔF/F', fontsize=12)
+                
+                ax.set_title(f'{state.capitalize()} State', fontsize=14)
+                ax.set_xlim([-pre_cue_time, post_cue_time])
+                ax.legend(loc='upper right', fontsize=10)
+                ax.grid(True, alpha=0.2)
+            
+            # Add main title
+            plt.suptitle(
+                f'Cross-Subject Photometry Response Following Loss Streaks by State (n={len(subject_results)} subjects)',
+                fontsize=16, y=0.98)
+            
+            plt.tight_layout(rect=[0, 0, 1, 0.95])  # Make room for the subtitle
+            
+            # Save the figure
+            suffix = "simple" if only_1_3 else "detailed"
+            save_figure(fig, "all_subjects", "pooled", f"loss_streak_photometry_by_state_{suffix}")
+            
+            plt.show()
+        
+        return {
+            'subject_id': 'All',
+            'n_subjects': len(subject_results),
+            'threshold': threshold,
+            'only_1_3': only_1_3,
+            'time_axis': time_axis,
+            'cross_subject_averages': cross_subject_averages,
+            'cross_subject_data': cross_subject_data
+        }
+    
+    else:
+        # Call the single-subject analysis
+        return analyze_loss_streaks_by_state_photometry_single(subject_id, threshold, only_1_3, plot_verification, behavior_df)
+
+
+def analyze_loss_streaks_by_state_photometry_single(subject_id, threshold=0.8, only_1_3=False, plot_verification=True, behavior_df=None):
+    """
+    Analyze photometry signals during loss streaks separated by behavioral state (stochastic vs biased)
+
+    Parameters:
+    -----------
+    subject_id : str
         The identifier for the subject
     threshold : float, optional (default=0.8)
         Probability threshold for assigning trials to a state
@@ -2162,6 +2931,17 @@ def analyze_loss_streaks_by_state_photometry(subject_id, threshold=0.8, only_1_3
             save_figure(fig, subject_id, "pooled", f"loss_streak_individual_trials_{state}_{suffix}")
 
             plt.show()
+
+
+    return {
+        'subject_id': subject_id,
+        'only_1_3': only_1_3,
+        'threshold': threshold,
+        'time_axis': time_axis,
+        'streak_data': streak_data,
+        'streak_averages': streak_averages,
+        'session_dates': session_dates
+    }
 
 
 def analyze_state_transitions(subject_id, window_size=10, min_stable_trials=3, split_bias=False, behavior_df=None):
@@ -2802,3 +3582,243 @@ def analyze_state_transitions(subject_id, window_size=10, min_stable_trials=3, s
         plt.show()
     
     return results
+
+
+def analyze_reward_rate_distribution_by_state(subject_id, window_size=20, threshold=0.8, behavior_df=None):
+    """
+    Analyze the distribution of reward rates by behavioral state (stochastic vs biased).
+    
+    For each session, calculate a moving average reward rate for each trial using a window size.
+    For early trials, weight in the overall session average. Group trials by their behavioral state
+    and plot histograms of reward rate distributions for comparison.
+    
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    window_size : int, optional (default=20)
+        Size of moving window for calculating reward rates
+    threshold : float, optional (default=0.8)
+        Probability threshold for assigning trials to a state
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from file
+        
+    Returns:
+    --------
+    dict: Analysis results including reward rate distributions by state
+    """
+    print(f"Analyzing reward rate distribution by behavioral state for {subject_id}...")
+    
+    subject_path = os.path.join(base_dir, subject_id)
+    # Load the parquet file to get state probability data
+    matching_pennies_sessions = set()
+    try:
+        if behavior_df is not None:
+            # If behavior_df is provided, filter it for this subject
+            subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
+        else:
+            # Otherwise load from parquet file
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            subject_data = df[(df['subjid'] == subject_id) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} from parquet file")
+    except Exception as e:
+        print(f"Warning: Could not load session info: {e}")
+
+    # Sort sessions chronologically, filtering to only include MatchingPennies sessions
+    sessions = sorted([d for d in os.listdir(subject_path)
+                if os.path.isdir(os.path.join(subject_path, d)) and
+                os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                d in matching_pennies_sessions])
+
+    # Store trials by state with their reward rates
+    state_reward_rates = {
+        'stochastic': [],
+        'biased': []
+    }
+    
+    # Track trials that will be excluded from the final calculation (first 10)
+    exclude_first_n = 10
+    
+    # Process each session
+    for session_date in sessions:
+        print(f"Processing {subject_id}/{session_date}...")
+        
+        # Get session data from parquet file
+        session_df = behavior_df[(behavior_df['subjid'] == subject_id) & (behavior_df['date'] == session_date)]
+        
+        if session_df.empty:
+            print(f"No behavioral data found for {subject_id}/{session_date}")
+            continue
+        
+        # Get photometry data (primarily for behavioral information)
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
+        if not session_result:
+            continue
+        
+        # Skip sessions with too few trials
+        if len(session_result['non_m_trials']) < 100:
+            print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
+            continue
+        
+        # Get behavioral data
+        behavior_data = session_result['behavioral_data']
+        rewards = np.array(behavior_data['reward'])
+        choices = np.array(behavior_data['choice'])
+        
+        # Filter out missed trials
+        non_miss_mask = choices != 'M'
+        filtered_rewards = rewards[non_miss_mask]
+        
+        # Skip if not enough trials after filtering
+        if len(filtered_rewards) < window_size:
+            print(f"Skipping {subject_id}/{session_date}, insufficient non-missed trials")
+            continue
+        
+        # Calculate overall session reward rate (for weighting early trials)
+        overall_reward_rate = np.mean(filtered_rewards)
+        
+        # Calculate moving average reward rates for each trial
+        reward_rates = []
+        
+        for i in range(len(filtered_rewards)):
+            if i < window_size:
+                # For early trials, use available data plus weighted overall rate
+                rewards_so_far = filtered_rewards[:i + 1]
+                available_weight = len(rewards_so_far) / window_size
+                rate = (np.mean(rewards_so_far) * available_weight +
+                        overall_reward_rate * (1 - available_weight))
+            else:
+                # For later trials, use full window
+                window_rewards = filtered_rewards[i - window_size + 1:i + 1]
+                rate = np.mean(window_rewards)
+            
+            reward_rates.append(rate)
+        
+        # Match state probabilities to filtered trials
+        trial_states = []
+        
+        # For each trial, determine its state
+        for i in range(len(session_df)):
+            if i < len(session_df):
+                p_stochastic = session_df.iloc[i]['p_stochastic']
+                p_leftbias = session_df.iloc[i]['p_leftbias']
+                p_rightbias = session_df.iloc[i]['p_rightbias']
+                
+                # Determine state based on threshold
+                if p_stochastic >= threshold:
+                    state = 'stochastic'
+                elif p_leftbias >= threshold or p_rightbias >= threshold:
+                    state = 'biased'
+                else:
+                    state = 'uncertain'
+                
+                trial_states.append(state)
+            else:
+                trial_states.append('uncertain')
+        
+        # Skip the first N trials as specified
+        for i in range(exclude_first_n, len(reward_rates)):
+            if i < len(trial_states):
+                state = trial_states[i]
+                
+                # Only include trials with clear state assignment (not uncertain)
+                if state == 'stochastic' or state == 'biased':
+                    state_reward_rates[state].append(reward_rates[i])
+    
+    # Calculate statistics
+    stats = {}
+    for state in ['stochastic', 'biased']:
+        if state_reward_rates[state]:
+            rates = state_reward_rates[state]
+            stats[state] = {
+                'count': len(rates),
+                'mean': np.mean(rates),
+                'median': np.median(rates),
+                'std': np.std(rates),
+                'min': np.min(rates),
+                'max': np.max(rates)
+            }
+        else:
+            stats[state] = {
+                'count': 0,
+                'mean': None,
+                'median': None,
+                'std': None,
+                'min': None,
+                'max': None
+            }
+    
+    # Print statistics
+    print("\nReward Rate Distribution Statistics:")
+    for state in ['stochastic', 'biased']:
+        print(f"\n{state.upper()} State (n={stats[state]['count']} trials):")
+        if stats[state]['count'] > 0:
+            print(f"  Mean: {stats[state]['mean']:.3f}")
+            print(f"  Median: {stats[state]['median']:.3f}")
+            print(f"  Std Dev: {stats[state]['std']:.3f}")
+            print(f"  Range: {stats[state]['min']:.3f} - {stats[state]['max']:.3f}")
+    
+    # Create histogram visualization
+    if sum(len(rates) for rates in state_reward_rates.values()) > 0:
+        plt.figure(figsize=(12, 7))
+        
+        # Define bin edges: 3 bins per 0.1 step (finer resolution)
+        bin_edges = np.arange(0, 1.01, 0.033)
+        
+        # Plot histograms with reduced alpha for better transparency
+        for state, color, alpha in [('stochastic', 'green', 0.4), ('biased', 'purple', 0.4)]:
+            if len(state_reward_rates[state]) > 0:
+                plt.hist(state_reward_rates[state], bins=bin_edges, alpha=alpha, 
+                         label=f"{state.capitalize()} (n={len(state_reward_rates[state])})",
+                         color=color, edgecolor='black', linewidth=1)
+        
+        # Add lines for mean values
+        for state, color, linestyle in [('stochastic', 'green', '-'), ('biased', 'purple', '--')]:
+            if stats[state]['mean'] is not None:
+                plt.axvline(stats[state]['mean'], color=color, linestyle=linestyle, linewidth=2, 
+                           label=f"{state.capitalize()} Mean: {stats[state]['mean']:.3f}")
+        
+        # Add vertical line at 0.5 reward rate for reference
+        plt.axvline(0.5, color='gray', linestyle=':', linewidth=2, label='50% Reward Rate')
+        
+        # Add labels and title
+        plt.xlabel('Reward Rate', fontsize=12)
+        plt.ylabel('Number of Trials', fontsize=12)
+        plt.title(f'Reward Rate Distribution by Behavioral State: {subject_id}', fontsize=14)
+        
+        # Set x-axis ticks
+        plt.xticks(np.arange(0, 1.1, 0.1))
+        plt.xlim([0, 1])
+        
+        # Add legend
+        plt.legend(loc='upper right')
+        plt.grid(alpha=0.3)
+        
+        # Add text with statistics
+        stats_text = '\n'.join([
+            f"Stochastic: mean={stats['stochastic']['mean']:.3f}, median={stats['stochastic']['median']:.3f}, std={stats['stochastic']['std']:.3f}",
+            f"Biased: mean={stats['biased']['mean']:.3f}, median={stats['biased']['median']:.3f}, std={stats['biased']['std']:.3f}"
+        ]) if stats['stochastic']['mean'] is not None and stats['biased']['mean'] is not None else ""
+        
+        plt.figtext(0.02, 0.02, stats_text, fontsize=10)
+        
+        # Tighten layout
+        plt.tight_layout()
+        
+        # Save the figure
+        save_figure(plt.gcf(), subject_id, "pooled", "reward_rate_distribution_by_state")
+        
+        plt.show()
+    
+    return {
+        'subject_id': subject_id,
+        'window_size': window_size,
+        'threshold': threshold,
+        'excluded_trials': exclude_first_n,
+        'state_reward_rates': state_reward_rates,
+        'stats': stats
+    }
