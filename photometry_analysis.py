@@ -993,7 +993,6 @@ def all_results(win_loss=False, force_recompute=False):
     print("Analyzing all subjects...")
     return analyze_all_subjects(win_loss=win_loss, force_recompute=force_recompute)
 
-
 def analyze_group_reward_rates(behavior_df=None, min_trials=100, save_fig=True, subjids=None):
     """
     Calculate and plot average reward rates across sessions for all subjects chronologically.
@@ -1093,22 +1092,48 @@ def analyze_group_reward_rates(behavior_df=None, min_trials=100, save_fig=True, 
 
     # Plot the results
     plt.figure(figsize=(12, 8))
-
-    # Create colors for subjects
-    num_subjects = len(subjects)
-    colors = plt.cm.viridis(np.linspace(0, 0.9, num_subjects))
-
-    # Plot each subject's reward rate progression
-    for i, subject_id in enumerate(subjects):
+    
+    # Initialize data structure for the group average
+    max_sessions = results['max_sessions']
+    sessions_data = [[] for _ in range(max_sessions + 1)]  # +1 to handle 1-indexed session numbers
+    
+    # Plot each subject's reward rate progression in thin gray
+    for subject_id in subjects:
         rates = results['session_reward_rates'][subject_id]
         if rates:
-            # Create enhanced legend label with session count and average reward rate
-            session_count = results['subject_session_counts'][subject_id]
-            avg_rate = results['subject_avg_rates'][subject_id]
-            label = f"{subject_id} (Sessions: {session_count}, RR: {avg_rate:.2f})"
+            # Plot individual subject in thin gray line
+            plt.plot(range(1, len(rates) + 1), rates, '-', 
+                     color='gray', linewidth=0.8, alpha=0.5)
+            
+            # Store data for group average calculation
+            for i, rate in enumerate(rates):
+                sessions_data[i+1].append(rate)
 
-            plt.plot(range(1, len(rates) + 1), rates, 'o-',
-                     color=colors[i], linewidth=2, label=label)
+    # Calculate and plot the group average with SEM
+    x_values = []
+    mean_values = []
+    sem_values = []
+    
+    for session_num, session_rates in enumerate(sessions_data):
+        if session_num == 0:
+            continue  # Skip the dummy index 0
+            
+        # Only include session in group average if at least 3 subjects have data
+        if len(session_rates) >= 3:
+            x_values.append(session_num)
+            session_mean = np.mean(session_rates)
+            session_sem = np.std(session_rates) / np.sqrt(len(session_rates))
+            mean_values.append(session_mean)
+            sem_values.append(session_sem)
+
+    # Plot the group average line and SEM if we have data
+    if x_values:
+        plt.fill_between(x_values, 
+                         np.array(mean_values) - np.array(sem_values),
+                         np.array(mean_values) + np.array(sem_values),
+                         color='black', alpha=0.2)
+        plt.plot(x_values, mean_values, 'o-', 
+                 color='black', linewidth=2.5, label=f'Group average (n={len(subjects)})')
 
     # Add a reference line at 0.5
     plt.axhline(y=0.5, color='red', linestyle='--', linewidth=1.5)
@@ -1122,12 +1147,9 @@ def analyze_group_reward_rates(behavior_df=None, min_trials=100, save_fig=True, 
     plt.xlim(0.5, results['max_sessions'] + 0.5)
     plt.ylim(0, 1)
     plt.grid(True, alpha=0.3)
-
-    # Add legend (outside plot if many subjects)
-    if num_subjects > 10:
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    else:
-        plt.legend(loc='upper right')
+    
+    # Add legend for group average
+    plt.legend(loc='upper right')
 
     plt.tight_layout()
 
@@ -1144,6 +1166,15 @@ def analyze_group_reward_rates(behavior_df=None, min_trials=100, save_fig=True, 
             print(f"Error saving figure: {e}")
 
     plt.show()
+    
+    # Add group average to results
+    results['group_average'] = {
+        'x': x_values,
+        'mean': mean_values,
+        'sem': sem_values
+    }
+    
+    return results
 
 
 def analyze_group_computer_confidence(behavior_df=None, min_trials=100, save_fig=True, subjids=None):
@@ -1264,21 +1295,47 @@ def analyze_group_computer_confidence(behavior_df=None, min_trials=100, save_fig
     # Plot the results
     plt.figure(figsize=(12, 8))
 
-    # Create colors for subjects
-    num_subjects = len(subjects)
-    colors = plt.cm.viridis(np.linspace(0, 0.9, num_subjects))
-
-    # Plot each subject's confidence progression
-    for i, subject_id in enumerate(subjects):
+    # Initialize data structure for the group average
+    max_sessions = results['max_sessions']
+    sessions_data = [[] for _ in range(max_sessions + 1)]  # +1 to handle 1-indexed session numbers
+    
+    # Plot each subject's confidence progression in thin gray
+    for subject_id in subjects:
         confidence = results['session_confidence'][subject_id]
         if confidence:
-            # Create enhanced legend label with session count and average confidence
-            session_count = results['subject_session_counts'][subject_id]
-            avg_conf = results['subject_avg_confidence'][subject_id]
-            label = f"{subject_id} (Sessions: {session_count}, CC: {avg_conf:.2f})"
+            # Plot individual subject in thin gray line
+            plt.plot(range(1, len(confidence) + 1), confidence, '-', 
+                     color='gray', linewidth=0.8, alpha=0.5)
+            
+            # Store data for group average calculation
+            for i, conf in enumerate(confidence):
+                sessions_data[i+1].append(conf)
 
-            plt.plot(range(1, len(confidence) + 1), confidence, 'o-',
-                     color=colors[i], linewidth=2, label=label)
+    # Calculate and plot the group average with SEM
+    x_values = []
+    mean_values = []
+    sem_values = []
+    
+    for session_num, session_confs in enumerate(sessions_data):
+        if session_num == 0:
+            continue  # Skip the dummy index 0
+            
+        # Only include session in group average if at least 3 subjects have data
+        if len(session_confs) >= 3:
+            x_values.append(session_num)
+            session_mean = np.mean(session_confs)
+            session_sem = np.std(session_confs) / np.sqrt(len(session_confs))
+            mean_values.append(session_mean)
+            sem_values.append(session_sem)
+
+    # Plot the group average line and SEM if we have data
+    if x_values:
+        plt.fill_between(x_values, 
+                         np.array(mean_values) - np.array(sem_values),
+                         np.array(mean_values) + np.array(sem_values),
+                         color='black', alpha=0.2)
+        plt.plot(x_values, mean_values, 'o-', 
+                 color='black', linewidth=2.5, label=f'Group average (n={len(subjects)})')
 
     # Add a reference line at p=0.05 (-log10(0.05) ≈ 1.3)
     p_05_line = -np.log10(0.05)
@@ -1294,11 +1351,8 @@ def analyze_group_computer_confidence(behavior_df=None, min_trials=100, save_fig
     plt.xlim(0.5, results['max_sessions'] + 0.5)
     plt.grid(True, alpha=0.3)
 
-    # Add legend (outside plot if many subjects)
-    if num_subjects > 10:
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    else:
-        plt.legend(loc='upper right')
+    # Add legend
+    plt.legend(loc='upper right')
 
     plt.tight_layout()
 
@@ -1315,7 +1369,15 @@ def analyze_group_computer_confidence(behavior_df=None, min_trials=100, save_fig
             print(f"Error saving figure: {e}")
 
     plt.show()
-
+    
+    # Add group average to results
+    results['group_average'] = {
+        'x': x_values,
+        'mean': mean_values,
+        'sem': sem_values
+    }
+    
+    return results
 
 def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False, behavior_df=None, specific_subjects=None):
     """
@@ -3986,7 +4048,8 @@ def analyze_group_perseverance(subject_ids=None, behavior_df=None, save_fig=True
         'valid_sessions': valid_sessions
     }
 
-def analyze_loss_streaks_before_win(subject_id="All", skipped_missed=True, only_1_5=False, behavior_df=None, specific_subjects=None):
+
+def analyze_loss_streaks_before_win(subject_id="All", skipped_missed=True, only_1_5=False, behavior_df=None, specific_subjects=None, plot_trial='loss'):
     """
     Analyze photometry signals for loss streaks of different lengths that end with a win.
     This function identifies trials that were not rewarded but where the next trial was rewarded,
@@ -4005,6 +4068,10 @@ def analyze_loss_streaks_before_win(subject_id="All", skipped_missed=True, only_
         Pre-loaded behavior dataframe to use instead of loading from parquet
     specific_subjects : list, optional
         List of subject IDs to include if subject_id="All"
+    plot_trial : str, optional (default='loss')
+        Which trial to analyze for each streak:
+        - 'win': Plot the first win trial after the loss streak
+        - 'loss': Plot the last loss trial in the streak (default)
         
     Returns:
     --------
@@ -4043,7 +4110,7 @@ def analyze_loss_streaks_before_win(subject_id="All", skipped_missed=True, only_
             print(f"Processing subject {subj} for loss streaks before win analysis...")
             
             # Process individual subject
-            subj_result = analyze_loss_streaks_before_win_single(subj, skipped_missed, only_1_5, behavior_df)
+            subj_result = analyze_loss_streaks_before_win_single(subj, skipped_missed, only_1_5, behavior_df, plot_trial)
             
             if subj_result and 'streak_averages' in subj_result:
                 if time_axis is None:
@@ -4093,13 +4160,23 @@ def analyze_loss_streaks_before_win(subject_id="All", skipped_missed=True, only_
                 category_trial_count = sum(subject_trial_counts[category])
                 displayed_trials += category_trial_count
                 
-                # Format label based on the category
-                if category == '1_loss':
-                    label_name = f"1 Loss (n={category_trial_count}, {len(subject_streak_avgs[category])} subjects)"
-                elif category == '5plus_loss':
-                    label_name = f"5+ Consecutive Losses (n={category_trial_count}, {len(subject_streak_avgs[category])} subjects)"
+                # Format label based on the category and plot_trial
+                if plot_trial == 'win':
+                    # For win trials, label shows this is the win following a loss streak
+                    if category == '1_loss':
+                        label_name = f"Win after 1 Loss (n={category_trial_count}, {len(subject_streak_avgs[category])} subjects)"
+                    elif category == '5plus_loss':
+                        label_name = f"Win after 5+ Consecutive Losses (n={category_trial_count}, {len(subject_streak_avgs[category])} subjects)"
+                    else:
+                        label_name = f"Win after {category[0]} Consecutive Losses (n={category_trial_count}, {len(subject_streak_avgs[category])} subjects)"
                 else:
-                    label_name = f"{category[0]} Consecutive Losses (n={category_trial_count}, {len(subject_streak_avgs[category])} subjects)"
+                    # For loss trials, label shows this is the last loss in the streak
+                    if category == '1_loss':
+                        label_name = f"1 Loss (n={category_trial_count}, {len(subject_streak_avgs[category])} subjects)"
+                    elif category == '5plus_loss':
+                        label_name = f"Last of 5+ Consecutive Losses (n={category_trial_count}, {len(subject_streak_avgs[category])} subjects)"
+                    else:
+                        label_name = f"Last of {category[0]} Consecutive Losses (n={category_trial_count}, {len(subject_streak_avgs[category])} subjects)"
                 
                 plt.fill_between(time_axis,
                                category_mean - category_sem,
@@ -4120,8 +4197,13 @@ def analyze_loss_streaks_before_win(subject_id="All", skipped_missed=True, only_
         # Add appropriate title based on parameters
         missed_text = "excluding" if skipped_missed else "including"
         plot_type = "Short (1) vs. Long (5+)" if only_1_5 else "All Categories"
-        plt.title(f'Cross-Subject LC Signal for Cumulative Loss: {plot_type}',
-                  fontsize=20)
+        
+        if plot_trial == 'win':
+            plt.title(f'Cross-Subject LC Signal Following Loss Streaks: {plot_type}',
+                      fontsize=20)
+        else:
+            plt.title(f'Cross-Subject LC Signal During Loss Streaks: {plot_type}',
+                      fontsize=20)
                   
         plt.xlim([-pre_cue_time, post_cue_time])
         plt.legend(loc='upper right', fontsize=12)
@@ -4133,7 +4215,8 @@ def analyze_loss_streaks_before_win(subject_id="All", skipped_missed=True, only_
         
         # Save the figure
         plot_cat_text = "1_and_5" if only_1_5 else "all_cats"
-        save_figure(plt.gcf(), "all_subjects", "pooled", f"loss_streaks_before_win_{missed_text}_missed_{plot_cat_text}")
+        trial_suffix = "win_after" if plot_trial == 'win' else "last_loss"
+        save_figure(plt.gcf(), "all_subjects", "pooled", f"loss_streaks_{trial_suffix}_{missed_text}_missed_{plot_cat_text}")
         
         plt.show()
         
@@ -4147,15 +4230,16 @@ def analyze_loss_streaks_before_win(subject_id="All", skipped_missed=True, only_
             'total_trials': total_trials,
             'displayed_trials': displayed_trials,
             'skipped_missed': skipped_missed,
-            'only_1_5': only_1_5
+            'only_1_5': only_1_5,
+            'plot_trial': plot_trial
         }
         
     else:
         # Original single-subject analysis
-        return analyze_loss_streaks_before_win_single(subject_id, skipped_missed, only_1_5, behavior_df)
+        return analyze_loss_streaks_before_win_single(subject_id, skipped_missed, only_1_5, behavior_df, plot_trial)
 
 
-def analyze_loss_streaks_before_win_single(subject_id, skipped_missed=True, only_1_5=False, behavior_df=None):
+def analyze_loss_streaks_before_win_single(subject_id, skipped_missed=True, only_1_5=False, behavior_df=None, plot_trial='loss'):
     """
     Analyze photometry signals for loss streaks of different lengths that end with a win.
     This function identifies trials that were not rewarded but where the next trial was rewarded,
@@ -4172,6 +4256,10 @@ def analyze_loss_streaks_before_win_single(subject_id, skipped_missed=True, only
         If True, only plot categories 1 and 5+ (shortest and longest streaks)
     behavior_df : pandas.DataFrame, optional
         Pre-loaded behavior dataframe to use instead of loading from parquet
+    plot_trial : str, optional (default='loss')
+        Which trial to analyze for each streak:
+        - 'win': Plot the first win trial after the loss streak
+        - 'loss': Plot the last loss trial in the streak (default)
         
     Returns:
     --------
@@ -4261,7 +4349,11 @@ def analyze_loss_streaks_before_win_single(subject_id, skipped_missed=True, only
             # Check if current trial is a loss and next is a win
             if filtered_rewards[i] == 0 and filtered_rewards[i + 1] == 1:
                 # This is a loss trial followed by a win
-                orig_trial_idx = filtered_to_orig[i]
+                orig_loss_idx = filtered_to_orig[i]  # Last loss trial
+                orig_win_idx = filtered_to_orig[i + 1]  # First win trial after streak
+
+                # Determine which trial to analyze based on plot_trial parameter
+                orig_trial_idx = orig_win_idx if plot_trial == 'win' else orig_loss_idx
 
                 # Skip if we don't have photometry data for this trial
                 if orig_trial_idx not in all_valid_trials:
@@ -4276,7 +4368,7 @@ def analyze_loss_streaks_before_win_single(subject_id, skipped_missed=True, only
 
                 photometry_data = all_valid_epoched_data[valid_trial_idx[0]]
 
-                # Now count consecutive losses going backward from current trial
+                # Now count consecutive losses going backward from the loss trial
                 loss_streak = 1  # Start with 1 (current trial is a loss)
 
                 if skipped_missed:
@@ -4289,7 +4381,7 @@ def analyze_loss_streaks_before_win_single(subject_id, skipped_missed=True, only
                             break
                 else:
                     # Looking back in original space (can include missed trials)
-                    for j in range(orig_trial_idx - 1, -1, -1):
+                    for j in range(orig_loss_idx - 1, -1, -1):
                         if j < len(rewards) and rewards[j] == 0:
                             loss_streak += 1
                         else:
@@ -4339,13 +4431,23 @@ def analyze_loss_streaks_before_win_single(subject_id, skipped_missed=True, only
         '5plus_loss': 'purple'
     }
 
-    labels = {
-        '1_loss': f"1 Loss (n={len(streak_data['1_loss'])})",
-        '2_loss': f"2 Consecutive Losses (n={len(streak_data['2_loss'])})",
-        '3_loss': f"3 Consecutive Losses (n={len(streak_data['3_loss'])})",
-        '4_loss': f"4 Consecutive Losses (n={len(streak_data['4_loss'])})",
-        '5plus_loss': f"5+ Consecutive Losses (n={len(streak_data['5plus_loss'])})"
-    }
+    # Create labels based on plot_trial parameter
+    if plot_trial == 'win':
+        labels = {
+            '1_loss': f"Win after 1 Loss (n={len(streak_data['1_loss'])})",
+            '2_loss': f"Win after 2 Consecutive Losses (n={len(streak_data['2_loss'])})",
+            '3_loss': f"Win after 3 Consecutive Losses (n={len(streak_data['3_loss'])})",
+            '4_loss': f"Win after 4 Consecutive Losses (n={len(streak_data['4_loss'])})",
+            '5plus_loss': f"Win after 5+ Consecutive Losses (n={len(streak_data['5plus_loss'])})"
+        }
+    else:
+        labels = {
+            '1_loss': f"1 Loss (n={len(streak_data['1_loss'])})",
+            '2_loss': f"2 Consecutive Losses (n={len(streak_data['2_loss'])})",
+            '3_loss': f"3 Consecutive Losses (n={len(streak_data['3_loss'])})",
+            '4_loss': f"4 Consecutive Losses (n={len(streak_data['4_loss'])})",
+            '5plus_loss': f"5+ Consecutive Losses (n={len(streak_data['5plus_loss'])})"
+        }
 
     # Determine which categories to plot based on only_1_5 parameter
     categories_to_plot = ['1_loss', '5plus_loss'] if only_1_5 else ['1_loss', '2_loss', '3_loss', '4_loss', '5plus_loss']
@@ -4368,10 +4470,17 @@ def analyze_loss_streaks_before_win_single(subject_id, skipped_missed=True, only
     plt.xlabel('Time (s)', fontsize=16)
     plt.ylabel('ΔF/F', fontsize=16)
 
+    # Title based on plot_trial parameter
     missed_text = "excluding" if skipped_missed else "including"
     plot_cat_text = "1_and_5" if only_1_5 else "all_cats"
-    plt.title(f'LC Signal for Cumulative Loss: {subject_id}',
-              fontsize=20)
+    
+    if plot_trial == 'win':
+        plt.title(f'LC Signal Following Loss Streaks: {subject_id}',
+                 fontsize=20)
+    else:
+        plt.title(f'LC Signal for Cumulative Loss: {subject_id}',
+                 fontsize=20)
+                 
     plt.xlim([-pre_cue_time, post_cue_time])
     plt.legend(loc='upper right')
     plt.tight_layout()
@@ -4382,7 +4491,8 @@ def analyze_loss_streaks_before_win_single(subject_id, skipped_missed=True, only
                 bbox=dict(facecolor='white', alpha=0.8))
 
     # Save the figure
-    save_figure(plt.gcf(), subject_id, "pooled", f"loss_streaks_before_win_{missed_text}_missed_{plot_cat_text}")
+    trial_suffix = "win_after" if plot_trial == 'win' else "last_loss"
+    save_figure(plt.gcf(), subject_id, "pooled", f"loss_streaks_{trial_suffix}_{missed_text}_missed_{plot_cat_text}")
 
     plt.show()
 
@@ -4396,9 +4506,9 @@ def analyze_loss_streaks_before_win_single(subject_id, skipped_missed=True, only
         'total_trials': total_trials,
         'displayed_trials': displayed_trials,
         'skipped_missed': skipped_missed,
-        'only_1_5': only_1_5
+        'only_1_5': only_1_5,
+        'plot_trial': plot_trial
     }
-
 
 def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False, behavior_df=None):
     """
@@ -4595,13 +4705,18 @@ def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False, beh
     win_loss_array = np.flipud(win_loss_array)
     flipped_session_dates = session_dates[::-1]  # Reverse the session dates for y-axis labels
 
-    # Create the heatmap
+    # Find the maximum absolute value for symmetric color scaling
+    max_abs_val = np.max(np.abs(win_loss_array))
+    
+    # Create the heatmap with symmetric color scaling around zero
     im = ax_heatmap.imshow(win_loss_array,
                            aspect='auto',
                            extent=[time_axis[0], time_axis[-1], 0, len(session_differences)],
                            origin='lower',
                            cmap='RdBu_r',
-                           interpolation='nearest')
+                           interpolation='nearest',
+                           vmin=-max_abs_val,   # Set minimum value to negative of maximum
+                           vmax=max_abs_val)    # Set maximum value to maximum
 
     # Add vertical line at cue onset
     ax_heatmap.axvline(x=0, color='black', linestyle='--', linewidth=1.5)
