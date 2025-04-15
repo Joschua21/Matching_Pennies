@@ -10,9 +10,6 @@ from scipy.stats import chi2_contingency, fisher_exact
 from photometry_analysis import calculate_sem, save_figure, process_session, plot_session_results, check_saved_pooled_results, save_pooled_results, analyze_pooled_data, load_filtered_behavior_data, ensure_directory_exists
 
 
-
-########################################################################FOR PRESENTATION: Currently some legens disabled, enable them again before plotting. 
-
 # Suppress deprecation warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
