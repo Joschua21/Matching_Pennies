@@ -83,7 +83,6 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
             
         # Average across subjects
         if condition == "current_trial" and win_loss:
-            # For win/loss analysis we need to collect data separately for win and loss trials
             stochastic_win_data = []
             stochastic_loss_data = []
             biased_win_data = []
@@ -219,7 +218,7 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
             plt.yticks(fontsize=24)
             plt.title(f'Photometry by Behavioral State and Outcome', fontsize=14)
             plt.xlim([-pre_cue_time, post_cue_time])
-            #plt.legend(loc='upper right', fontsize=24)
+            plt.legend(loc='upper right', fontsize=24)
             plt.tight_layout()
             
             # Save the figure
@@ -373,7 +372,7 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
             plt.yticks(fontsize=24)
             plt.title(f'Photometry by Behavioral State and Previous Outcome', fontsize=26)
             plt.xlim([-pre_cue_time, post_cue_time])
-            #plt.legend(loc='upper right', fontsize=24)
+            plt.legend(loc='upper right', fontsize=24)
             plt.tight_layout()
             
             # Save the figure
@@ -473,7 +472,7 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
             plt.yticks(fontsize=24)
             plt.title(f'Photometry by Behavioral State', fontsize=26)
             plt.xlim([-pre_cue_time, post_cue_time])
-            #plt.legend(loc='upper right', fontsize=24)
+            plt.legend(loc='upper right', fontsize=24)
             plt.tight_layout()
             
             # Save the figure
@@ -944,7 +943,7 @@ def analyze_behavioral_states_single(subject_id, win_loss=False, threshold=0.8, 
 
     plt.title(plot_title, fontsize=26)
     plt.xlim([-pre_cue_time, post_cue_time])
-    #plt.legend(loc='upper right', fontsize=12)
+    plt.legend(loc='upper right', fontsize=12)
 
     # Add threshold info and classification stats to the plot
     plt.figtext(0.01, 0.01,
@@ -4749,7 +4748,7 @@ def analyze_stay_switch_photometry(subject_id="All", state=False, behavior_df=No
         plt.title(f'LC Signal by Stay/Switch and Outcome', 
                  fontsize=26)
         plt.xlim([-pre_cue_time, post_cue_time])
-        #plt.legend(loc='upper right', fontsize=12)
+        plt.legend(loc='upper right', fontsize=12)
         plt.tight_layout()
         
         # Save the figure
@@ -4786,7 +4785,7 @@ def analyze_stay_switch_photometry(subject_id="All", state=False, behavior_df=No
                 plt.title(f'{state_type.capitalize()} State: LC Signal by Stay/Switch and Outcome (All Subjects)', 
                         fontsize=26)
                 plt.xlim([-pre_cue_time, post_cue_time])
-                #plt.legend(loc='upper right', fontsize=12)
+                plt.legend(loc='upper right', fontsize=12)
                 plt.tight_layout()
                 
                 # Save the figure
@@ -4821,7 +4820,7 @@ def analyze_stay_switch_photometry(subject_id="All", state=False, behavior_df=No
                 plt.title(f'{labels[condition]}: LC Signal by State (All Subjects)', 
                         fontsize=26)
                 plt.xlim([-pre_cue_time, post_cue_time])
-                #plt.legend(loc='upper right', fontsize=12)
+                plt.legend(loc='upper right', fontsize=12)
                 plt.tight_layout()
                 
                 # Save the figure
