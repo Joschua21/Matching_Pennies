@@ -9,6 +9,10 @@ import scipy.stats
 from scipy.stats import chi2_contingency, fisher_exact
 from photometry_analysis import calculate_sem, save_figure, process_session, plot_session_results, check_saved_pooled_results, save_pooled_results, analyze_pooled_data, load_filtered_behavior_data, ensure_directory_exists
 
+
+
+########################################################################FOR PRESENTATION: Currently some legens disabled, enable them again before plotting. 
+
 # Suppress deprecation warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -23,11 +27,10 @@ post_cue_samples = int(post_cue_time * sampling_rate)
 total_window_samples = pre_cue_samples + post_cue_samples
 
 PARQUET_PATH = "/Volumes/ogma/delab/matchingpennies/matchingpennies_datatable.parquet"
-CODE_VERSION = "1.0.6"  # Increment this when making analysis changes --> will force recomputation of all data
+CODE_VERSION = "1.1.1"  # Increment this when making analysis changes --> will force recomputation of all data
 _SESSION_CACHE = {}
 
-
-def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=None, behavior_df=None):
+def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=None, behavior_df=None, condition=None):
     """
     Analyze behavioral states from GLM-HMM analysis across trials.
     
@@ -41,6 +44,9 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
         List of subject IDs to include if subjid="All"
     behavior_df : pandas.DataFrame, optional
         Pre-loaded behavior dataframe to use instead of loading from file
+    condition : str, optional (default=None)
+        Condition to analyze: "current_trial" for win/loss, "previous_trial" for previous win/loss,
+        or None for state only (ignores win_loss parameter if set to None)
         
     Returns:
     --------
@@ -65,7 +71,7 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
             print(f"Processing subject {subject} for behavioral state analysis...")
             try:
                 # Get individual subject results by calling original function
-                subject_result = analyze_behavioral_states_single(subject, win_loss, behavior_df=behavior_df)
+                subject_result = analyze_behavioral_states_single(subject, win_loss, behavior_df=behavior_df, condition=condition)
                 if subject_result:
                     subject_results.append(subject_result)
             except Exception as e:
@@ -76,8 +82,8 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
             return None
             
         # Average across subjects
-        if win_loss:
-            # For win-loss analysis we need to collect data separately for win and loss trials
+        if condition == "current_trial" and win_loss:
+            # For win/loss analysis we need to collect data separately for win and loss trials
             stochastic_win_data = []
             stochastic_loss_data = []
             biased_win_data = []
@@ -125,10 +131,10 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
             
             # Define colors and styles for win/loss conditions
             colors = {
-                'stochastic_win': 'mediumblue',
-                'stochastic_loss': 'royalblue',
-                'biased_win': 'darkred',
-                'biased_loss': 'indianred'
+                'stochastic_win': 'darkgreen',
+                'stochastic_loss': 'lightgreen',
+                'biased_win': 'purple',
+                'biased_loss': 'plum'
             }
             
             linestyles = {
@@ -152,7 +158,7 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
                         color=colors['stochastic_win'],
                         linestyle=linestyles['stochastic_win'],
                         linewidth=2,
-                        label=f"Stochastic Win (n={len(stochastic_win_data)} subjects)")
+                        label=f"Stochastic Win")
                         
             # Plot stochastic loss data if available
             if stochastic_loss_data:
@@ -168,7 +174,7 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
                         color=colors['stochastic_loss'],
                         linestyle=linestyles['stochastic_loss'],
                         linewidth=2,
-                        label=f"Stochastic Loss (n={len(stochastic_loss_data)} subjects)")
+                        label=f"Stochastic Loss")
                         
             # Plot biased win data if available
             if biased_win_data:
@@ -184,7 +190,7 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
                         color=colors['biased_win'],
                         linestyle=linestyles['biased_win'],
                         linewidth=2,
-                        label=f"Biased Win (n={len(biased_win_data)} subjects)")
+                        label=f"Biased Win")
                         
             # Plot biased loss data if available
             if biased_loss_data:
@@ -200,18 +206,20 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
                         color=colors['biased_loss'],
                         linestyle=linestyles['biased_loss'],
                         linewidth=2,
-                        label=f"Biased Loss (n={len(biased_loss_data)} subjects)")
+                        label=f"Biased Loss")
             
             # Add reference lines
             plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
             plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
             
             # Add labels and title
-            plt.xlabel('Time (s)', fontsize=12)
-            plt.ylabel('ΔF/F', fontsize=12)
-            plt.title(f'Cross-Subject Photometry by Behavioral State (Win-Loss)', fontsize=14)
+            plt.xlabel('Time (s) after first lick', fontsize=24)
+            plt.ylabel('z-ΔF/F', fontsize=24)
+            plt.xticks(fontsize=24)
+            plt.yticks(fontsize=24)
+            plt.title(f'Photometry by Behavioral State and Outcome', fontsize=14)
             plt.xlim([-pre_cue_time, post_cue_time])
-            plt.legend(loc='upper right')
+            #plt.legend(loc='upper right', fontsize=24)
             plt.tight_layout()
             
             # Save the figure
@@ -223,11 +231,166 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
                 'subjid': 'All',
                 'specific_subjects': specific_subjects,
                 'win_loss': win_loss,
+                'condition': condition,
                 'n_subjects': len(subject_results),
                 'stochastic_win_data': stochastic_win_data,
                 'stochastic_loss_data': stochastic_loss_data,
                 'biased_win_data': biased_win_data,
                 'biased_loss_data': biased_loss_data,
+                'time_axis': time_axis
+            }
+        
+        elif condition == "previous_trial" and win_loss:
+            # For previous trial outcome analysis
+            stochastic_prev_win_data = []
+            stochastic_prev_loss_data = []
+            biased_prev_win_data = []
+            biased_prev_loss_data = []
+            
+            time_axis = None
+            
+            # Extract data from each subject's results
+            for result in subject_results:
+                if time_axis is None and 'time_axis' in result:
+                    time_axis = result['time_axis']
+                
+                # Extract previous win/loss data for each state
+                if ('stochastic' in result and 
+                    result['stochastic'] is not None and 
+                    'prev_win_avg' in result['stochastic'] and 
+                    result['stochastic']['prev_win_avg'] is not None):
+                    stochastic_prev_win_data.append(result['stochastic']['prev_win_avg'])
+                
+                if ('stochastic' in result and 
+                    result['stochastic'] is not None and 
+                    'prev_loss_avg' in result['stochastic'] and 
+                    result['stochastic']['prev_loss_avg'] is not None):
+                    stochastic_prev_loss_data.append(result['stochastic']['prev_loss_avg'])
+                    
+                if ('biased' in result and 
+                    result['biased'] is not None and 
+                    'prev_win_avg' in result['biased'] and 
+                    result['biased']['prev_win_avg'] is not None):
+                    biased_prev_win_data.append(result['biased']['prev_win_avg'])
+                    
+                if ('biased' in result and 
+                    result['biased'] is not None and 
+                    'prev_loss_avg' in result['biased'] and 
+                    result['biased']['prev_loss_avg'] is not None):
+                    biased_prev_loss_data.append(result['biased']['prev_loss_avg'])
+            
+            if time_axis is None or (not stochastic_prev_win_data and not stochastic_prev_loss_data and 
+                                    not biased_prev_win_data and not biased_prev_loss_data):
+                print("No valid previous outcome data found for cross-subject analysis")
+                return None
+                
+            # Create the plot
+            plt.figure(figsize=(12, 7))
+            
+            # Define colors and styles for previous win/loss conditions
+            colors = {
+                'stochastic_prev_win': 'darkgreen',
+                'stochastic_prev_loss': 'lightgreen',
+                'biased_prev_win': 'purple',
+                'biased_prev_loss': 'plum'
+            }
+            
+            linestyles = {
+                'stochastic_prev_win': '-',
+                'stochastic_prev_loss': '--',
+                'biased_prev_win': '-',
+                'biased_prev_loss': '--'
+            }
+            
+            # Plot stochastic previous win data if available
+            if stochastic_prev_win_data:
+                avg = np.mean(stochastic_prev_win_data, axis=0)
+                sem = np.std(stochastic_prev_win_data, axis=0) / np.sqrt(len(stochastic_prev_win_data))
+                
+                plt.fill_between(time_axis,
+                                avg - sem,
+                                avg + sem,
+                                color=colors['stochastic_prev_win'], alpha=0.3)
+                plt.plot(time_axis, avg,
+                        color=colors['stochastic_prev_win'],
+                        linestyle=linestyles['stochastic_prev_win'],
+                        linewidth=2,
+                        label=f"Stochastic Previous Win")
+                        
+            # Plot stochastic previous loss data if available
+            if stochastic_prev_loss_data:
+                avg = np.mean(stochastic_prev_loss_data, axis=0)
+                sem = np.std(stochastic_prev_loss_data, axis=0) / np.sqrt(len(stochastic_prev_loss_data))
+                
+                plt.fill_between(time_axis,
+                                avg - sem,
+                                avg + sem,
+                                color=colors['stochastic_prev_loss'], alpha=0.3)
+                plt.plot(time_axis, avg,
+                        color=colors['stochastic_prev_loss'],
+                        linestyle=linestyles['stochastic_prev_loss'],
+                        linewidth=2,
+                        label=f"Stochastic Previous Loss")
+                        
+            # Plot biased previous win data if available
+            if biased_prev_win_data:
+                avg = np.mean(biased_prev_win_data, axis=0)
+                sem = np.std(biased_prev_win_data, axis=0) / np.sqrt(len(biased_prev_win_data))
+                
+                plt.fill_between(time_axis,
+                                avg - sem,
+                                avg + sem,
+                                color=colors['biased_prev_win'], alpha=0.3)
+                plt.plot(time_axis, avg,
+                        color=colors['biased_prev_win'],
+                        linestyle=linestyles['biased_prev_win'],
+                        linewidth=2,
+                        label=f"Biased Previous Win")
+                        
+            # Plot biased previous loss data if available
+            if biased_prev_loss_data:
+                avg = np.mean(biased_prev_loss_data, axis=0)
+                sem = np.std(biased_prev_loss_data, axis=0) / np.sqrt(len(biased_prev_loss_data))
+                
+                plt.fill_between(time_axis,
+                                avg - sem,
+                                avg + sem,
+                                color=colors['biased_prev_loss'], alpha=0.3)
+                plt.plot(time_axis, avg,
+                        color=colors['biased_prev_loss'],
+                        linestyle=linestyles['biased_prev_loss'],
+                        linewidth=2,
+                        label=f"Biased Previous Loss")
+            
+            # Add reference lines
+            plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5)
+            plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+            
+            # Add labels and title
+            plt.xlabel('Time (s) after first lick', fontsize=24)
+            plt.ylabel('z-ΔF/F', fontsize=24)
+            plt.xticks(fontsize=24)
+            plt.yticks(fontsize=24)
+            plt.title(f'Photometry by Behavioral State and Previous Outcome', fontsize=26)
+            plt.xlim([-pre_cue_time, post_cue_time])
+            #plt.legend(loc='upper right', fontsize=24)
+            plt.tight_layout()
+            
+            # Save the figure
+            save_figure(plt.gcf(), "all_subjects", "pooled", "behavioral_states_prev_outcome")
+            
+            plt.show()
+            
+            return {
+                'subjid': 'All',
+                'specific_subjects': specific_subjects,
+                'win_loss': win_loss,
+                'condition': condition,
+                'n_subjects': len(subject_results),
+                'stochastic_prev_win_data': stochastic_prev_win_data,
+                'stochastic_prev_loss_data': stochastic_prev_loss_data,
+                'biased_prev_win_data': biased_prev_win_data,
+                'biased_prev_loss_data': biased_prev_loss_data,
                 'time_axis': time_axis
             }
             
@@ -265,8 +428,8 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
             
             # Define colors for states
             colors = {
-                'stochastic': 'blue',
-                'biased': 'red'
+                'stochastic': 'darkgreen',
+                'biased': 'purple'
             }
             
             # Plot stochastic data if available
@@ -282,7 +445,7 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
                 plt.plot(time_axis, avg,
                         color=colors['stochastic'],
                         linewidth=2,
-                        label=f"Stochastic (n={len(stochastic_data)} subjects)")
+                        label=f"Stochastic")
             
             # Plot biased data if available
             if biased_data:
@@ -297,18 +460,20 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
                 plt.plot(time_axis, avg,
                         color=colors['biased'],
                         linewidth=2,
-                        label=f"Biased (n={len(biased_data)} subjects)")
+                        label=f"Biased")
             
             # Add reference lines
-            plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+            plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5)
             plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
             
             # Add labels and title
-            plt.xlabel('Time (s)', fontsize=12)
-            plt.ylabel('ΔF/F', fontsize=12)
-            plt.title(f'Cross-Subject Photometry by Behavioral State', fontsize=14)
+            plt.xlabel('Time (s) after first lick', fontsize=24)
+            plt.ylabel('z-ΔF/F', fontsize=24)
+            plt.xticks(fontsize=24)
+            plt.yticks(fontsize=24)
+            plt.title(f'Photometry by Behavioral State', fontsize=26)
             plt.xlim([-pre_cue_time, post_cue_time])
-            plt.legend(loc='upper right')
+            #plt.legend(loc='upper right', fontsize=24)
             plt.tight_layout()
             
             # Save the figure
@@ -320,6 +485,7 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
                 'subjid': 'All',
                 'specific_subjects': specific_subjects,
                 'win_loss': win_loss,
+                'condition': condition,
                 'n_subjects': len(subject_results),
                 'stochastic_data': stochastic_data,
                 'biased_data': biased_data,
@@ -328,10 +494,9 @@ def analyze_behavioral_states(subjid="All", win_loss=False, specific_subjects=No
     
     else:
         # Original single-subject analysis (call original function)
-        return analyze_behavioral_states_single(subjid, win_loss, behavior_df=behavior_df)
+        return analyze_behavioral_states_single(subjid, win_loss, behavior_df=behavior_df, condition=condition)
 
-
-def analyze_behavioral_states_single(subject_id, win_loss=False, threshold=0.8, behavior_df=None):
+def analyze_behavioral_states_single(subject_id, win_loss=False, threshold=0.8, behavior_df=None, condition=None):
     """
     Analyze photometry signals based on behavioral states (stochastic vs biased)
 
@@ -343,6 +508,11 @@ def analyze_behavioral_states_single(subject_id, win_loss=False, threshold=0.8, 
         If True, further subdivides each state group into win and loss trials
     threshold : float, optional (default=0.8)
         Probability threshold for assigning trials to a state
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from file
+    condition : str, optional (default=None)
+        Condition to analyze: "current_trial" for win/loss, "previous_trial" for previous win/loss,
+        or None for state only (ignores win_loss parameter if set to None)
 
     Returns:
     --------
@@ -380,17 +550,21 @@ def analyze_behavioral_states_single(subject_id, win_loss=False, threshold=0.8, 
         print(f"Error: Missing required columns in parquet data: {missing_cols}")
         return None
 
-    # Store results
+    # Store results based on analysis type
     state_data = {
         'stochastic': {
             'data': [],
             'win_data': [],
-            'loss_data': []
+            'loss_data': [],
+            'prev_win_data': [],
+            'prev_loss_data': []
         },
         'biased': {
             'data': [],
             'win_data': [],
-            'loss_data': []
+            'loss_data': [],
+            'prev_win_data': [],
+            'prev_loss_data': []
         }
     }
 
@@ -440,6 +614,12 @@ def analyze_behavioral_states_single(subject_id, win_loss=False, threshold=0.8, 
 
         # Get original indices for non-missed trials
         orig_non_miss_indices = np.where(non_miss_mask)[0]
+
+        # Create previous reward array (shifted)
+        # First trial has no previous trial, assign -1 (will be filtered out)
+        prev_rewards = np.zeros_like(reward_outcomes)
+        prev_rewards[0] = -1  # No previous trial for first trial
+        prev_rewards[1:] = reward_outcomes[:-1]
 
         # Create a mapping from filtered trial indices to state probabilities
         trial_states = []
@@ -492,11 +672,24 @@ def analyze_behavioral_states_single(subject_id, win_loss=False, threshold=0.8, 
             # Add to overall state data
             state_data[state]['data'].append(photometry_data)
 
-            # Add to win/loss subgroups if requested
-            if reward == 1:  # Win
-                state_data[state]['win_data'].append(photometry_data)
-            else:  # Loss
-                state_data[state]['loss_data'].append(photometry_data)
+            # Add to win/loss subgroups if analyzing current trial outcomes
+            if condition == "current_trial" or (win_loss and condition is None):
+                if reward == 1:  # Win
+                    state_data[state]['win_data'].append(photometry_data)
+                else:  # Loss
+                    state_data[state]['loss_data'].append(photometry_data)
+                    
+            # Add to previous win/loss subgroups if analyzing previous trial outcomes
+            if condition == "previous_trial" or (win_loss and condition is None):
+                # Skip first trial (no previous outcome)
+                non_m_idx = non_m_indices[i] if i < len(non_m_indices) else None
+                if non_m_idx is not None and non_m_idx < len(prev_rewards):
+                    prev_outcome = prev_rewards[non_m_idx]
+                    if prev_outcome != -1:  # Not the first trial
+                        if prev_outcome == 1:  # Previous Win
+                            state_data[state]['prev_win_data'].append(photometry_data)
+                        else:  # Previous Loss
+                            state_data[state]['prev_loss_data'].append(photometry_data)
 
     # Check if we found any valid trials
     stochastic_count = len(state_data['stochastic']['data'])
@@ -528,6 +721,10 @@ def analyze_behavioral_states_single(subject_id, win_loss=False, threshold=0.8, 
             state_data[state]['win_data'] = np.array(state_data[state]['win_data'])
         if state_data[state]['loss_data']:
             state_data[state]['loss_data'] = np.array(state_data[state]['loss_data'])
+        if state_data[state]['prev_win_data']:
+            state_data[state]['prev_win_data'] = np.array(state_data[state]['prev_win_data'])
+        if state_data[state]['prev_loss_data']:
+            state_data[state]['prev_loss_data'] = np.array(state_data[state]['prev_loss_data'])
 
     # Calculate averages and SEMs
     for state in ['stochastic', 'biased']:
@@ -551,17 +748,31 @@ def analyze_behavioral_states_single(subject_id, win_loss=False, threshold=0.8, 
         else:
             state_data[state]['loss_avg'] = None
             state_data[state]['loss_sem'] = None
+            
+        if len(state_data[state]['prev_win_data']) > 0:
+            state_data[state]['prev_win_avg'] = np.mean(state_data[state]['prev_win_data'], axis=0)
+            state_data[state]['prev_win_sem'] = calculate_sem(state_data[state]['prev_win_data'], axis=0)
+        else:
+            state_data[state]['prev_win_avg'] = None
+            state_data[state]['prev_win_sem'] = None
+            
+        if len(state_data[state]['prev_loss_data']) > 0:
+            state_data[state]['prev_loss_avg'] = np.mean(state_data[state]['prev_loss_data'], axis=0)
+            state_data[state]['prev_loss_sem'] = calculate_sem(state_data[state]['prev_loss_data'], axis=0)
+        else:
+            state_data[state]['prev_loss_avg'] = None
+            state_data[state]['prev_loss_sem'] = None
 
-    # Create plot
+    # Create plot based on analysis type
     plt.figure(figsize=(12, 7))
 
-    if win_loss:
+    if condition == "current_trial" and win_loss:
         # Plot win/loss separated for each state
         colors = {
-            'stochastic_win': 'mediumblue',
-            'stochastic_loss': 'royalblue',
-            'biased_win': 'darkred',
-            'biased_loss': 'indianred'
+            'stochastic_win': 'darkgreen',
+            'stochastic_loss': 'lightgreen',
+            'biased_win': 'purple',
+            'biased_loss': 'plum'
         }
 
         linestyles = {
@@ -618,11 +829,82 @@ def analyze_behavioral_states_single(subject_id, win_loss=False, threshold=0.8, 
                      linestyle=linestyles['biased_loss'],
                      linewidth=2,
                      label=f"Biased Loss (n={len(state_data['biased']['loss_data'])})")
+                     
+        plot_title = f'Photometry by Behavioral State and Outcome: {subject_id}'
+        save_suffix = "behavioral_states_winloss"
+        
+    elif condition == "previous_trial" and win_loss:
+        # Plot previous win/loss separated for each state
+        colors = {
+            'stochastic_prev_win': 'darkgreen',
+            'stochastic_prev_loss': 'lightgreen',
+            'biased_prev_win': 'purple',
+            'biased_prev_loss': 'plum'
+        }
+
+        linestyles = {
+            'stochastic_prev_win': '-',
+            'stochastic_prev_loss': '--',
+            'biased_prev_win': '-',
+            'biased_prev_loss': '--'
+        }
+
+        # Plot stochastic previous wins
+        if state_data['stochastic']['prev_win_avg'] is not None:
+            plt.fill_between(time_axis,
+                             state_data['stochastic']['prev_win_avg'] - state_data['stochastic']['prev_win_sem'],
+                             state_data['stochastic']['prev_win_avg'] + state_data['stochastic']['prev_win_sem'],
+                             color=colors['stochastic_prev_win'], alpha=0.3)
+            plt.plot(time_axis, state_data['stochastic']['prev_win_avg'],
+                     color=colors['stochastic_prev_win'],
+                     linestyle=linestyles['stochastic_prev_win'],
+                     linewidth=2,
+                     label=f"Stochastic Previous Win (n={len(state_data['stochastic']['prev_win_data'])})")
+
+        # Plot stochastic previous losses
+        if state_data['stochastic']['prev_loss_avg'] is not None:
+            plt.fill_between(time_axis,
+                             state_data['stochastic']['prev_loss_avg'] - state_data['stochastic']['prev_loss_sem'],
+                             state_data['stochastic']['prev_loss_avg'] + state_data['stochastic']['prev_loss_sem'],
+                             color=colors['stochastic_prev_loss'], alpha=0.3)
+            plt.plot(time_axis, state_data['stochastic']['prev_loss_avg'],
+                     color=colors['stochastic_prev_loss'],
+                     linestyle=linestyles['stochastic_prev_loss'],
+                     linewidth=2,
+                     label=f"Stochastic Previous Loss (n={len(state_data['stochastic']['prev_loss_data'])})")
+
+        # Plot biased previous wins
+        if state_data['biased']['prev_win_avg'] is not None:
+            plt.fill_between(time_axis,
+                             state_data['biased']['prev_win_avg'] - state_data['biased']['prev_win_sem'],
+                             state_data['biased']['prev_win_avg'] + state_data['biased']['prev_win_sem'],
+                             color=colors['biased_prev_win'], alpha=0.3)
+            plt.plot(time_axis, state_data['biased']['prev_win_avg'],
+                     color=colors['biased_prev_win'],
+                     linestyle=linestyles['biased_prev_win'],
+                     linewidth=2,
+                     label=f"Biased Previous Win (n={len(state_data['biased']['prev_win_data'])})")
+
+        # Plot biased previous losses
+        if state_data['biased']['prev_loss_avg'] is not None:
+            plt.fill_between(time_axis,
+                             state_data['biased']['prev_loss_avg'] - state_data['biased']['prev_loss_sem'],
+                             state_data['biased']['prev_loss_avg'] + state_data['biased']['prev_loss_sem'],
+                             color=colors['biased_prev_loss'], alpha=0.3)
+            plt.plot(time_axis, state_data['biased']['prev_loss_avg'],
+                     color=colors['biased_prev_loss'],
+                     linestyle=linestyles['biased_prev_loss'],
+                     linewidth=2,
+                     label=f"Biased Previous Loss (n={len(state_data['biased']['prev_loss_data'])})")
+                     
+        plot_title = f'Photometry by Behavioral State and Previous Outcome: {subject_id}'
+        save_suffix = "behavioral_states_prev_outcome"
+        
     else:
         # Plot overall state averages without separating by outcome
         colors = {
-            'stochastic': 'blue',
-            'biased': 'red'
+            'stochastic': 'darkgreen',
+            'biased': 'purple'
         }
 
         # Plot stochastic trials
@@ -646,19 +928,23 @@ def analyze_behavioral_states_single(subject_id, win_loss=False, threshold=0.8, 
                      color=colors['biased'],
                      linewidth=2,
                      label=f"Biased (n={len(state_data['biased']['data'])})")
+                     
+        plot_title = f'Photometry by Behavioral State: {subject_id}'
+        save_suffix = "behavioral_states_combined"
 
     # Add reference lines
-    plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+    plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5)
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
 
     # Add labels and title
-    plt.xlabel('Time (s)', fontsize=12)
-    plt.ylabel('ΔF/F', fontsize=12)
+    plt.xlabel('Time (s) after first lick', fontsize=24)
+    plt.xticks(fontsize=24)
+    plt.ylabel('z-ΔF/F', fontsize=24)
+    plt.yticks(fontsize=24)
 
-    win_loss_suffix = "Win-Loss" if win_loss else "Combined"
-    plt.title(f'Photometry by Behavioral State ({win_loss_suffix}): {subject_id}', fontsize=14)
+    plt.title(plot_title, fontsize=26)
     plt.xlim([-pre_cue_time, post_cue_time])
-    plt.legend(loc='upper right')
+    #plt.legend(loc='upper right', fontsize=12)
 
     # Add threshold info and classification stats to the plot
     plt.figtext(0.01, 0.01,
@@ -668,26 +954,24 @@ def analyze_behavioral_states_single(subject_id, win_loss=False, threshold=0.8, 
     plt.tight_layout()
 
     # Save the figure
-    save_figure(plt.gcf(), subject_id, "pooled",
-                f"behavioral_states_{'winloss' if win_loss else 'combined'}")
+    save_figure(plt.gcf(), subject_id, "pooled", save_suffix)
 
     plt.show()
 
     return {
-    'subject_id': subject_id,
-    'threshold': threshold,
-    'time_axis': time_axis,
-    'stochastic': state_data['stochastic'],
-    'biased': state_data['biased'],
-    'stochastic_count': stochastic_count, 
-    'biased_count': biased_count,
-    'uncertain_count': uncertain_count,
-    'total_non_m_trials': total_non_m_trials,
-    'stochastic_pct': stochastic_pct,
-    'biased_pct': biased_pct,
-    'uncertain_pct': uncertain_pct
-        }
-
+        'subject_id': subject_id,
+        'threshold': threshold,
+        'time_axis': time_axis,
+        'stochastic': state_data['stochastic'],
+        'biased': state_data['biased'],
+        'stochastic_count': stochastic_count, 
+        'biased_count': biased_count,
+        'uncertain_count': uncertain_count,
+        'total_non_m_trials': total_non_m_trials,
+        'stochastic_pct': stochastic_pct,
+        'biased_pct': biased_pct,
+        'uncertain_pct': uncertain_pct
+    }
 
 def plot_state_probabilities(subject_id, session_date=None, behavior_df=None):
     """
@@ -882,10 +1166,10 @@ def plot_state_probabilities(subject_id, session_date=None, behavior_df=None):
 
     return None
 
-def analyze_state_occupation(behavior_df=None, subjid="All", save_fig=True):
+def analyze_state_occupation(behavior_df=None, subjid="All", save_fig=True, smooth_window=4):
     """
     Calculate and plot the percentage of trials spent in each behavioral state 
-    (stochastic, left_biased, right_biased) across sessions.
+    (stochastic, left_biased, right_biased) across sessions with smoothing option.
     
     Parameters:
     -----------
@@ -895,6 +1179,8 @@ def analyze_state_occupation(behavior_df=None, subjid="All", save_fig=True):
         Subject ID to analyze, or "All" for group analysis
     save_fig : bool, optional
         Whether to save the generated figure
+    smooth_window : int, optional (default=4)
+        Number of sessions to use for smoothing window (0 for no smoothing)
     
     Returns:
     --------
@@ -999,6 +1285,24 @@ def analyze_state_occupation(behavior_df=None, subjid="All", save_fig=True):
             subject_results[subject_id] = session_states
             max_sessions = max(max_sessions, len(session_states))
     
+    # Function to apply moving average smoothing
+    def smooth_data(data, window_size):
+        if window_size <= 1:
+            return data  # No smoothing
+        
+        # Apply centered moving average
+        smoothed = []
+        for i in range(len(data)):
+            # Calculate window bounds
+            start = max(0, i - window_size // 2)
+            end = min(len(data), i + window_size // 2 + 1)
+            
+            # Calculate average of window
+            window_data = data[start:end]
+            smoothed.append(sum(window_data) / len(window_data))
+        
+        return smoothed
+    
     # Plot individual subject results
     for subject_id, sessions in subject_results.items():
         if subjid != "All":  # Only plot individual subjects if not group analysis
@@ -1010,14 +1314,31 @@ def analyze_state_occupation(behavior_df=None, subjid="All", save_fig=True):
             left_biased_pcts = [s['left_biased'] for s in sessions]
             right_biased_pcts = [s['right_biased'] for s in sessions]
             
-            # Plot each state percentage (lines only, no points)
-            plt.plot(session_nums, stochastic_pcts, '-', color='green', linewidth=2, label='Stochastic')
-            plt.plot(session_nums, left_biased_pcts, '-', color='red', linewidth=2, label='Left Biased')
-            plt.plot(session_nums, right_biased_pcts, '-', color='blue', linewidth=2, label='Right Biased')
+            # Apply smoothing if requested
+            if smooth_window > 1 and len(session_nums) > smooth_window:
+                stochastic_smooth = smooth_data(stochastic_pcts, smooth_window)
+                left_biased_smooth = smooth_data(left_biased_pcts, smooth_window)
+                right_biased_smooth = smooth_data(right_biased_pcts, smooth_window)
+                
+                # Plot both raw data (thin transparent lines) and smoothed data
+                plt.plot(session_nums, stochastic_pcts, '-', color='green', alpha=0.3, linewidth=1)
+                plt.plot(session_nums, left_biased_pcts, '-', color='red', alpha=0.3, linewidth=1)
+                plt.plot(session_nums, right_biased_pcts, '-', color='blue', alpha=0.3, linewidth=1)
+                
+                # Plot smoothed data - use same x-axis as raw data
+                plt.plot(session_nums, stochastic_smooth, '-', color='green', linewidth=2.5, label='Stochastic')
+                plt.plot(session_nums, left_biased_smooth, '-', color='red', linewidth=2.5, label='Left Biased')
+                plt.plot(session_nums, right_biased_smooth, '-', color='blue', linewidth=2.5, label='Right Biased')
+            else:
+                # Plot raw data only
+                plt.plot(session_nums, stochastic_pcts, '-', color='green', linewidth=2, label='Stochastic')
+                plt.plot(session_nums, left_biased_pcts, '-', color='red', linewidth=2, label='Left Biased')
+                plt.plot(session_nums, right_biased_pcts, '-', color='blue', linewidth=2, label='Right Biased')
             
             plt.xlabel('Session Number', fontsize=12)
             plt.ylabel('State Occupation (proportion)', fontsize=12)
-            plt.title(f'State Occupation Across Sessions - {subject_id}', fontsize=14)
+            smoothing_info = f" (Smoothed, window={smooth_window})" if smooth_window > 1 else ""
+            plt.title(f'State Occupation Across Sessions - {subject_id}{smoothing_info}', fontsize=14)
             
             plt.xlim(0.5, len(sessions) + 0.5)
             plt.ylim(0, 1)
@@ -1035,7 +1356,7 @@ def analyze_state_occupation(behavior_df=None, subjid="All", save_fig=True):
             if save_fig:
                 figure_path = os.path.join(output_dir, subject_id, "pooled")
                 ensure_directory_exists(figure_path)
-                fig_file = os.path.join(figure_path, "state_occupation.png")
+                fig_file = os.path.join(figure_path, f"state_occupation{'' if smooth_window <= 1 else f'_smooth{smooth_window}'}.png")
                 
                 try:
                     plt.savefig(fig_file, dpi=300, bbox_inches='tight')
@@ -1108,36 +1429,70 @@ def analyze_state_occupation(behavior_df=None, subjid="All", save_fig=True):
                 plt.plot(session_nums, left_biased_pcts, '-', color='gray', linewidth=0.8, alpha=0.3)
                 plt.plot(session_nums, right_biased_pcts, '-', color='gray', linewidth=0.8, alpha=0.3)
             
-            # Plot group means with shaded error areas
-            # Stochastic state
-            plt.plot(x_values, stochastic_means, '-', color='green', linewidth=2.5, label='Stochastic')
-            plt.fill_between(x_values, 
-                            [m - s for m, s in zip(stochastic_means, stochastic_sems)],
-                            [m + s for m, s in zip(stochastic_means, stochastic_sems)],
-                            color='green', alpha=0.2)
-            
-            # Left biased state
-            plt.plot(x_values, left_biased_means, '-', color='red', linewidth=2.5, label='Left Biased')
-            plt.fill_between(x_values, 
-                            [m - s for m, s in zip(left_biased_means, left_biased_sems)],
-                            [m + s for m, s in zip(left_biased_means, left_biased_sems)],
-                            color='red', alpha=0.2)
-            
-            # Right biased state
-            plt.plot(x_values, right_biased_means, '-', color='blue', linewidth=2.5, label='Right Biased')
-            plt.fill_between(x_values, 
-                            [m - s for m, s in zip(right_biased_means, right_biased_sems)],
-                            [m + s for m, s in zip(right_biased_means, right_biased_sems)],
-                            color='blue', alpha=0.2)
+            # Apply smoothing to group data if requested
+            if smooth_window > 1 and len(x_values) > smooth_window:
+                # Smooth the means
+                stochastic_smooth = smooth_data(stochastic_means, smooth_window)
+                left_biased_smooth = smooth_data(left_biased_means, smooth_window)
+                right_biased_smooth = smooth_data(right_biased_means, smooth_window)
+                
+                # Smooth the SEMs (using same window size)
+                stochastic_sems_smooth = smooth_data(stochastic_sems, smooth_window)
+                left_biased_sems_smooth = smooth_data(left_biased_sems, smooth_window)
+                right_biased_sems_smooth = smooth_data(right_biased_sems, smooth_window)
+                
+                # Plot raw means with thin lines
+                plt.plot(x_values, stochastic_means, '-', color='green', linewidth=1, alpha=0.3)
+                plt.plot(x_values, left_biased_means, '-', color='red', linewidth=1, alpha=0.3)
+                plt.plot(x_values, right_biased_means, '-', color='blue', linewidth=1, alpha=0.3)
+                
+                # Plot smoothed lines - use the same x-values for both raw and smoothed data
+                plt.plot(x_values, stochastic_smooth, '-', color='green', linewidth=2.5, label='Stochastic')
+                plt.fill_between(x_values, 
+                                [m - s for m, s in zip(stochastic_smooth, stochastic_sems_smooth)],
+                                [m + s for m, s in zip(stochastic_smooth, stochastic_sems_smooth)],
+                                color='green', alpha=0.2)
+                
+                plt.plot(x_values, left_biased_smooth, '-', color='red', linewidth=2.5, label='Left Biased')
+                plt.fill_between(x_values, 
+                                [m - s for m, s in zip(left_biased_smooth, left_biased_sems_smooth)],
+                                [m + s for m, s in zip(left_biased_smooth, left_biased_sems_smooth)],
+                                color='red', alpha=0.2)
+                
+                plt.plot(x_values, right_biased_smooth, '-', color='blue', linewidth=2.5, label='Right Biased')
+                plt.fill_between(x_values, 
+                                [m - s for m, s in zip(right_biased_smooth, right_biased_sems_smooth)],
+                                [m + s for m, s in zip(right_biased_smooth, right_biased_sems_smooth)],
+                                color='blue', alpha=0.2)
+            else:
+                # Plot non-smoothed group means with shaded error areas
+                plt.plot(x_values, stochastic_means, '-', color='green', linewidth=2.5, label='Stochastic')
+                plt.fill_between(x_values, 
+                                [m - s for m, s in zip(stochastic_means, stochastic_sems)],
+                                [m + s for m, s in zip(stochastic_means, stochastic_sems)],
+                                color='green', alpha=0.2)
+                
+                plt.plot(x_values, left_biased_means, '-', color='red', linewidth=2.5, label='Left Biased')
+                plt.fill_between(x_values, 
+                                [m - s for m, s in zip(left_biased_means, left_biased_sems)],
+                                [m + s for m, s in zip(left_biased_means, left_biased_sems)],
+                                color='red', alpha=0.2)
+                
+                plt.plot(x_values, right_biased_means, '-', color='blue', linewidth=2.5, label='Right Biased')
+                plt.fill_between(x_values, 
+                                [m - s for m, s in zip(right_biased_means, right_biased_sems)],
+                                [m + s for m, s in zip(right_biased_means, right_biased_sems)],
+                                color='blue', alpha=0.2)
             
             plt.xlabel('Session Number', fontsize=14)
             plt.ylabel('State Occupation (proportion)', fontsize=14)
-            plt.title(f'Group State Occupation Across Sessions (n={len(subjects)})', fontsize=16)
+            smoothing_info = f" (Smoothed, window={smooth_window})" if smooth_window > 1 else ""
+            plt.title(f'Group State Occupation Across Sessions (n={len(subjects)}){smoothing_info}', fontsize=16)
             
             plt.xlim(0.5, max(x_values) + 0.5)
             plt.ylim(0, 1)
             plt.grid(True, alpha=0.3)
-            plt.legend(loc='upper right')
+            plt.legend(loc='upper right', fontsize=12)
             
             plt.tight_layout()
             
@@ -1145,7 +1500,7 @@ def analyze_state_occupation(behavior_df=None, subjid="All", save_fig=True):
             if save_fig:
                 figure_path = os.path.join(output_dir, "group_analysis")
                 ensure_directory_exists(figure_path)
-                fig_file = os.path.join(figure_path, "group_state_occupation.png")
+                fig_file = os.path.join(figure_path, f"group_state_occupation{'' if smooth_window <= 1 else f'_smooth{smooth_window}'}.png")
                 
                 try:
                     plt.savefig(fig_file, dpi=300, bbox_inches='tight')
@@ -1161,18 +1516,31 @@ def analyze_state_occupation(behavior_df=None, subjid="All", save_fig=True):
     results = {
         'subjects': subjects,
         'subject_results': subject_results,
+        'smooth_window': smooth_window
     }
     
     if subjid == "All":
-        results['group_data'] = {
-            'x': x_values,
-            'stochastic_mean': stochastic_means,
-            'stochastic_sem': stochastic_sems,
-            'left_biased_mean': left_biased_means,
-            'left_biased_sem': left_biased_sems,
-            'right_biased_mean': right_biased_means,
-            'right_biased_sem': right_biased_sems
-        }
+        if x_values:
+            if smooth_window > 1 and len(x_values) > smooth_window:
+                results['group_data'] = {
+                    'x': x_values,
+                    'stochastic_mean': stochastic_smooth,
+                    'stochastic_sem': stochastic_sems_smooth,
+                    'left_biased_mean': left_biased_smooth,
+                    'left_biased_sem': left_biased_sems_smooth,
+                    'right_biased_mean': right_biased_smooth,
+                    'right_biased_sem': right_biased_sems_smooth
+                }
+            else:
+                results['group_data'] = {
+                    'x': x_values,
+                    'stochastic_mean': stochastic_means,
+                    'stochastic_sem': stochastic_sems,
+                    'left_biased_mean': left_biased_means,
+                    'left_biased_sem': left_biased_sems,
+                    'right_biased_mean': right_biased_means,
+                    'right_biased_sem': right_biased_sems
+                }
     
     return results
 
@@ -1292,10 +1660,10 @@ def analyze_previous_outcome_effect_by_state(subject_id, threshold=0.8, specific
         
         # Define colors and labels
         colors = {
-            'prev_win_curr_win': 'darkgreen',
-            'prev_win_curr_loss': 'firebrick',
-            'prev_loss_curr_win': 'mediumseagreen',
-            'prev_loss_curr_loss': 'indianred'
+            'prev_win_curr_win': '#117733',  # green
+            'prev_win_curr_loss': '#DDCC77', # yellow
+            'prev_loss_curr_win': '#4477AA', # blue
+            'prev_loss_curr_loss': '#CC6677' # red
         }
         
         condition_labels = {
@@ -1645,10 +2013,10 @@ def analyze_previous_outcome_effect_by_state_single(subject_id, threshold=0.8, b
 
     # Define colors and labels
     colors = {
-        'prev_win_curr_win': 'darkgreen',
-        'prev_win_curr_loss': 'firebrick',
-        'prev_loss_curr_win': 'mediumseagreen',
-        'prev_loss_curr_loss': 'indianred'
+        'prev_win_curr_win': '#117733',  # green
+        'prev_win_curr_loss': '#DDCC77', # yellow
+        'prev_loss_curr_win': '#4477AA', # blue
+        'prev_loss_curr_loss': '#CC6677' # red
     }
 
     condition_labels = {
@@ -4119,6 +4487,36 @@ def analyze_reward_rate_distribution_by_state(subject_id, window_size=20, thresh
                 'max': None
             }
     
+    # Calculate biased high/low split if we have biased trials
+    biased_rates = state_reward_rates['biased']
+    biased_median = None
+    biased_high_rates = []
+    biased_low_rates = []
+    
+    if len(biased_rates) > 0:
+        biased_median = np.median(biased_rates)
+        biased_high_rates = [r for r in biased_rates if r >= biased_median]
+        biased_low_rates = [r for r in biased_rates if r < biased_median]
+        
+        # Add statistics for high/low biased subgroups
+        stats['biased_high'] = {
+            'count': len(biased_high_rates),
+            'mean': np.mean(biased_high_rates) if len(biased_high_rates) > 0 else None,
+            'median': np.median(biased_high_rates) if len(biased_high_rates) > 0 else None,
+            'std': np.std(biased_high_rates) if len(biased_high_rates) > 0 else None,
+            'min': np.min(biased_high_rates) if len(biased_high_rates) > 0 else None,
+            'max': np.max(biased_high_rates) if len(biased_high_rates) > 0 else None
+        }
+        
+        stats['biased_low'] = {
+            'count': len(biased_low_rates),
+            'mean': np.mean(biased_low_rates) if len(biased_low_rates) > 0 else None,
+            'median': np.median(biased_low_rates) if len(biased_low_rates) > 0 else None,
+            'std': np.std(biased_low_rates) if len(biased_low_rates) > 0 else None,
+            'min': np.min(biased_low_rates) if len(biased_low_rates) > 0 else None,
+            'max': np.max(biased_low_rates) if len(biased_low_rates) > 0 else None
+        }
+    
     # Print statistics
     print("\nReward Rate Distribution Statistics:")
     for state in ['stochastic', 'biased']:
@@ -4129,56 +4527,66 @@ def analyze_reward_rate_distribution_by_state(subject_id, window_size=20, thresh
             print(f"  Std Dev: {stats[state]['std']:.3f}")
             print(f"  Range: {stats[state]['min']:.3f} - {stats[state]['max']:.3f}")
     
+    if biased_median is not None:
+        print("\nBiased State Split at Median:")
+        print(f"  Median Value: {biased_median:.3f}")
+        print(f"  Biased High (≥{biased_median:.3f}): {len(biased_high_rates)} trials")
+        print(f"  Biased Low (<{biased_median:.3f}): {len(biased_low_rates)} trials")
+    
     # Create histogram visualization
     if sum(len(rates) for rates in state_reward_rates.values()) > 0:
         plt.figure(figsize=(12, 7))
         
         # Determine appropriate bins based on window size
         # For window_size=20, possible values are multiples of 0.05 (1/20)
-        bin_step = 1/window_size
+        bin_step = 0.1/3
         
         # Create bins that center on the possible values
         # Add a small offset to ensure each possible value falls into a bin
         offset = bin_step / 3
-        bin_edges = np.arange(0 - offset, 1.0 + bin_step + offset, bin_step/3)
+        bin_edges = np.arange(0 - offset, 1.0 + bin_step + offset, bin_step)
         
         # Plot histograms with reduced alpha for better transparency
-        for state, color, alpha in [('stochastic', 'green', 0.4), ('biased', 'purple', 0.4)]:
-            if len(state_reward_rates[state]) > 0:
-                plt.hist(state_reward_rates[state], bins=bin_edges, alpha=alpha, 
-                         label=f"{state.capitalize()} (n={len(state_reward_rates[state])})",
-                         color=color, edgecolor='black', linewidth=1)
+        # First stochastic state
+        if len(state_reward_rates['stochastic']) > 0:
+            plt.hist(state_reward_rates['stochastic'], bins=bin_edges, alpha=0.4, 
+                    label=f"Stochastic (n={len(state_reward_rates['stochastic'])})",
+                    color='green', edgecolor='black', linewidth=1)
         
-        # Add lines for mean values
-        for state, color, linestyle in [('stochastic', 'green', '-'), ('biased', 'purple', '--')]:
-            if stats[state]['mean'] is not None:
-                plt.axvline(stats[state]['mean'], color=color, linestyle=linestyle, linewidth=2, 
-                           label=f"{state.capitalize()} Mean: {stats[state]['mean']:.3f}")
-        
-        # Add vertical line at 0.5 reward rate for reference
-        plt.axvline(0.5, color='gray', linestyle=':', linewidth=2, label='50% Reward Rate')
-        
+        # Then biased state, split into high and low reward rate
+        if biased_median is not None:
+            # Plot biased low (red)
+            if len(biased_low_rates) > 0:
+                plt.hist(biased_low_rates, bins=bin_edges, alpha=0.4, 
+                        label=f"Biased Low (<{biased_median:.3f}, n={len(biased_low_rates)})",
+                        color='red', edgecolor='black', linewidth=1)
+            
+            # Plot biased high (blue)
+            if len(biased_high_rates) > 0:
+                plt.hist(biased_high_rates, bins=bin_edges, alpha=0.4, 
+                        label=f"Biased High (≥{biased_median:.3f}, n={len(biased_high_rates)})",
+                        color='blue', edgecolor='black', linewidth=1)
+        else:
+            # If no median calculated, just plot all biased trials in purple
+            if len(state_reward_rates['biased']) > 0:
+                plt.hist(state_reward_rates['biased'], bins=bin_edges, alpha=0.4, 
+                        label=f"Biased (n={len(state_reward_rates['biased'])})",
+                        color='purple', edgecolor='black', linewidth=1)
+        if biased_median is not None:
+            plt.axvline(biased_median, color='grey', linestyle='--', linewidth=1.5, alpha=1)
         # Add labels and title
-        plt.xlabel('Reward Rate', fontsize=12)
-        plt.ylabel('Number of Trials', fontsize=12)
-        plt.title(f'Reward Rate Distribution by Behavioral State: {subject_id}', fontsize=14)
+        plt.xlabel('Current Reward Rate', fontsize=24)
+        plt.ylabel('Trial Count', fontsize=24)
+        plt.tick_params(axis='both', which='major', labelsize=20)
+        plt.title(f'Reward Rate Distribution by Behavioral State', fontsize=26)
         
-        # Set x-axis ticks at possible reward rate values
-        possible_values = np.arange(0, 1.01, 1/window_size)
-        plt.xticks(possible_values)
+        # Set x-axis ticks at 0.1 intervals only
+        plt.xticks(np.arange(0, 1.01, 0.1))
         plt.xlim([0, 1])
         
         # Add legend
         plt.legend(loc='upper right')
         plt.grid(alpha=0.3)
-        
-        # Add text with statistics
-        stats_text = '\n'.join([
-            f"Stochastic: mean={stats['stochastic']['mean']:.3f}, median={stats['stochastic']['median']:.3f}, std={stats['stochastic']['std']:.3f}",
-            f"Biased: mean={stats['biased']['mean']:.3f}, median={stats['biased']['median']:.3f}, std={stats['biased']['std']:.3f}"
-        ]) if stats['stochastic']['mean'] is not None and stats['biased']['mean'] is not None else ""
-        
-        plt.figtext(0.02, 0.02, stats_text, fontsize=10)
         
         # Tighten layout
         plt.tight_layout()
@@ -4187,46 +4595,6 @@ def analyze_reward_rate_distribution_by_state(subject_id, window_size=20, thresh
         save_figure(plt.gcf(), subject_id, "pooled", "reward_rate_distribution_by_state")
         
         plt.show()
-    
-    # Perform statistical test to compare distributions if we have enough data
-    if len(state_reward_rates['stochastic']) > 10 and len(state_reward_rates['biased']) > 10:
-        # Shapiro-Wilk test for normality
-        try:
-            from scipy import stats as scipy_stats
-            _, p_stochastic = scipy_stats.shapiro(np.random.choice(state_reward_rates['stochastic'], 
-                                                             size=min(5000, len(state_reward_rates['stochastic']))))
-            _, p_biased = scipy_stats.shapiro(np.random.choice(state_reward_rates['biased'], 
-                                                        size=min(5000, len(state_reward_rates['biased']))))
-            
-            print("\nNormality Test (Shapiro-Wilk):")
-            print(f"  Stochastic: p={p_stochastic:.6f} ({'Normal' if p_stochastic > 0.05 else 'Non-normal'} distribution)")
-            print(f"  Biased: p={p_biased:.6f} ({'Normal' if p_biased > 0.05 else 'Non-normal'} distribution)")
-            
-            # Choose appropriate test based on normality
-            if p_stochastic > 0.05 and p_biased > 0.05:
-                # Both are normal - use t-test
-                t_stat, p_value = scipy_stats.ttest_ind(state_reward_rates['stochastic'], state_reward_rates['biased'])
-                print("\nIndependent t-test results:")
-                print(f"  t-statistic: {t_stat:.4f}")
-                print(f"  p-value: {p_value:.6f}")
-                if p_value < 0.05:
-                    print("  Result: Reward rates are significantly different between states (p < 0.05)")
-                else:
-                    print("  Result: No significant difference in reward rates between states")
-            else:
-                # At least one is non-normal - use Mann-Whitney U test
-                u_stat, p_value = scipy_stats.mannwhitneyu(state_reward_rates['stochastic'], state_reward_rates['biased'])
-                print("\nMann-Whitney U test results:")
-                print(f"  U-statistic: {u_stat:.4f}")
-                print(f"  p-value: {p_value:.6f}")
-                if p_value < 0.05:
-                    print("  Result: Reward rates are significantly different between states (p < 0.05)")
-                else:
-                    print("  Result: No significant difference in reward rates between states")
-        except Exception as e:
-            print(f"\nStatistical test failed: {e}")
-    else:
-        print("\nNot enough data for statistical comparison between states")
     
     return {
         'subject_id': subject_id,
@@ -4375,12 +4743,13 @@ def analyze_stay_switch_photometry(subject_id="All", state=False, behavior_df=No
         plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
         
         # Labels and formatting
-        plt.xlabel('Time (s)', fontsize=16)
-        plt.ylabel('ΔF/F', fontsize=16)
-        plt.title(f'LC Signal by Stay/Switch and Outcome: All Subjects (n={len(valid_subjects)})', 
-                 fontsize=20)
+        plt.xlabel('Time (s) after first lick', fontsize=24)
+        plt.ylabel('z-ΔF/F', fontsize=24)
+        plt.tick_params(axis='both', which='major', labelsize=20)
+        plt.title(f'LC Signal by Stay/Switch and Outcome', 
+                 fontsize=26)
         plt.xlim([-pre_cue_time, post_cue_time])
-        plt.legend(loc='upper right', fontsize=12)
+        #plt.legend(loc='upper right', fontsize=12)
         plt.tight_layout()
         
         # Save the figure
@@ -4411,12 +4780,13 @@ def analyze_stay_switch_photometry(subject_id="All", state=False, behavior_df=No
                 plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
                 plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
                 
-                plt.xlabel('Time (s)', fontsize=16)
-                plt.ylabel('ΔF/F', fontsize=16)
+                plt.xlabel('Time (s) after first lick', fontsize=24)
+                plt.ylabel('z-ΔF/F', fontsize=24)
+                plt.tick_params(axis='both', which='major', labelsize=20)
                 plt.title(f'{state_type.capitalize()} State: LC Signal by Stay/Switch and Outcome (All Subjects)', 
-                        fontsize=20)
+                        fontsize=26)
                 plt.xlim([-pre_cue_time, post_cue_time])
-                plt.legend(loc='upper right', fontsize=12)
+                #plt.legend(loc='upper right', fontsize=12)
                 plt.tight_layout()
                 
                 # Save the figure
@@ -4445,12 +4815,13 @@ def analyze_stay_switch_photometry(subject_id="All", state=False, behavior_df=No
                 plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
                 plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
                 
-                plt.xlabel('Time (s)', fontsize=16)
-                plt.ylabel('ΔF/F', fontsize=16)
+                plt.xlabel('Time (s) after first lick', fontsize=24)
+                plt.ylabel('z-ΔF/F', fontsize=24)
+                plt.tick_params(axis='both', which='major', labelsize=20)
                 plt.title(f'{labels[condition]}: LC Signal by State (All Subjects)', 
-                        fontsize=20)
+                        fontsize=26)
                 plt.xlim([-pre_cue_time, post_cue_time])
-                plt.legend(loc='upper right', fontsize=12)
+                #plt.legend(loc='upper right', fontsize=12)
                 plt.tight_layout()
                 
                 # Save the figure
@@ -4844,3 +5215,2032 @@ def analyze_stay_switch_photometry_single(subject_id, state=False, behavior_df=N
         result['state_data'] = state_condition_data
     
     return result
+
+
+def analyze_reward_rate_state_win_loss(subject_id="All", window_size=20, threshold=0.8, behavior_df=None, specific_subjects=None, split_biased=True):
+    """
+    Analyze photometry signals based on smoothed reward rate and behavioral state, comparing
+    win vs. loss signals and previous outcome effects.
+    
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject or "All" for cross-subject analysis
+    window_size : int, optional (default=20)
+        Size of moving window for calculating reward rates
+    threshold : float, optional (default=0.8)
+        Probability threshold for assigning trials to a state
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from parquet
+    specific_subjects : list, optional
+        List of subject IDs to include if subject_id="All"
+    split_biased : bool, optional (default=True)
+        If True, split biased trials into high/low reward rate groups
+        If False, treat all biased trials as a single group
+        
+    Returns:
+    --------
+    dict: Analysis results including win-loss differences and previous outcome effects
+         by state and reward rate category
+    """
+    if subject_id == "All":
+        # Cross-subject analysis
+        if behavior_df is None:
+            print("Loading behavior data for all subjects...")
+            behavior_df = load_filtered_behavior_data("MatchingPennies")
+            
+        # Default list of subjects
+        if specific_subjects is None:
+            specific_subjects = ["JOA-M-0022", "JOA-M-0023", "JOA-M-0024", "JOA-M-0025", "JOA-M-0026"]
+            print(f"Using default subject list: {specific_subjects}")
+        
+        # Store subject-level results
+        subject_results = []
+        
+        # Process each subject individually
+        for subj in specific_subjects:
+            print(f"Processing subject {subj} for reward rate and state analysis...")
+            
+            try:
+                # Process individual subject
+                subj_result = analyze_reward_rate_state_win_loss_single(subj, window_size, threshold, behavior_df, split_biased)
+                
+                if subj_result:
+                    subject_results.append(subj_result)
+            except Exception as e:
+                print(f"Error processing subject {subj}: {e}")
+                traceback.print_exc()
+        
+        if not subject_results:
+            print("No valid subjects found for cross-subject analysis")
+            return None
+        
+        # Store time axis from first subject
+        time_axis = None
+        for result in subject_results:
+            if 'time_axis' in result and result['time_axis'] is not None:
+                time_axis = result['time_axis']
+                break
+        
+        if time_axis is None:
+            print("No time axis found in subject results")
+            return None
+        
+        # Define groups based on split_biased parameter
+        if split_biased:
+            groups = ['stochastic', 'biased_low', 'biased_high']
+        else:
+            groups = ['stochastic', 'biased']
+        
+        # Collect win-loss differences and previous outcome effects for each subject by group
+        cross_subject_data = {
+            'win_loss_diff': {group: [] for group in groups},
+            'prev_outcome_diff': {group: [] for group in groups}
+        }
+        
+        for result in subject_results:
+            for diff_type in ['win_loss_diff', 'prev_outcome_diff']:
+                if diff_type in result:
+                    for group in groups:
+                        if group in result[diff_type] and result[diff_type][group] is not None:
+                            cross_subject_data[diff_type][group].append(result[diff_type][group])
+        
+        # Calculate cross-subject averages and SEMs
+        cross_subject_averages = {
+            'win_loss_diff': {},
+            'prev_outcome_diff': {}
+        }
+        
+        for diff_type in ['win_loss_diff', 'prev_outcome_diff']:
+            for group in groups:
+                if len(cross_subject_data[diff_type][group]) > 0:
+                    group_data = np.array(cross_subject_data[diff_type][group])
+                    cross_subject_averages[diff_type][group] = {
+                        'avg': np.mean(group_data, axis=0),
+                        'sem': np.std(group_data, axis=0) / np.sqrt(len(group_data)),
+                        'count': len(group_data)
+                    }
+                else:
+                    cross_subject_averages[diff_type][group] = {
+                        'avg': None,
+                        'sem': None,
+                        'count': 0
+                    }
+        
+        # Create plots for cross-subject analysis
+        
+        # 1. Win-Loss difference plot
+        plt.figure(figsize=(12, 7))
+        
+        # Define colors and labels based on split_biased parameter
+        if split_biased:
+            colors = {
+                'stochastic': 'green',
+                'biased_low': 'red',
+                'biased_high': 'blue'
+            }
+            
+            labels = {
+                'stochastic': 'Stochastic',
+                'biased_low': 'Biased (Low Reward Rate)',
+                'biased_high': 'Biased (High Reward Rate)'
+            }
+        else:
+            colors = {
+                'stochastic': 'green',
+                'biased': 'purple'
+            }
+            
+            labels = {
+                'stochastic': 'Stochastic',
+                'biased': 'Biased'
+            }
+        
+        for group, color in colors.items():
+            if cross_subject_averages['win_loss_diff'][group]['avg'] is not None:
+                group_avg = cross_subject_averages['win_loss_diff'][group]['avg']
+                group_sem = cross_subject_averages['win_loss_diff'][group]['sem']
+                group_count = cross_subject_averages['win_loss_diff'][group]['count']
+                
+                plt.fill_between(time_axis,
+                               group_avg - group_sem,
+                               group_avg + group_sem,
+                               color=color, alpha=0.3)
+                plt.plot(time_axis, group_avg,
+                       color=color, linewidth=2,
+                       label=f"{labels[group]} (n={group_count} subjects)")
+        
+        # Add vertical line at cue onset
+        plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5)
+        plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        
+        plt.xlabel('Time (s) after first lick', fontsize=24)
+        plt.ylabel('Win - Loss z-ΔF/F Difference', fontsize=24)
+        plt.xticks(fontsize=20)
+        plt.yticks(fontsize=20)
+        split_status = "Split Biased" if split_biased else "Combined Biased"
+        plt.title(f'Win-Loss Signal Difference by State', fontsize=26)
+        plt.xlim([-pre_cue_time, post_cue_time])
+        #plt.legend(loc='upper right', fontsize=12)
+        plt.tight_layout()
+        
+        # Save the figure with appropriate suffix
+        split_suffix = "split" if split_biased else "combined"
+        save_figure(plt.gcf(), "all_subjects", "pooled", f"win_loss_diff_by_state_{split_suffix}_w{window_size}")
+        
+        plt.show()
+        
+        # 2. Previous Outcome difference plot
+        plt.figure(figsize=(12, 7))
+        
+        for group, color in colors.items():
+            if cross_subject_averages['prev_outcome_diff'][group]['avg'] is not None:
+                group_avg = cross_subject_averages['prev_outcome_diff'][group]['avg']
+                group_sem = cross_subject_averages['prev_outcome_diff'][group]['sem']
+                group_count = cross_subject_averages['prev_outcome_diff'][group]['count']
+                
+                plt.fill_between(time_axis,
+                               group_avg - group_sem,
+                               group_avg + group_sem,
+                               color=color, alpha=0.3)
+                plt.plot(time_axis, group_avg,
+                       color=color, linewidth=2,
+                       label=f"{labels[group]} (n={group_count} subjects)")
+        
+        # Add vertical line at cue onset
+        plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5)
+        plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        
+        plt.xlabel('Time (s) after first lick', fontsize=24)
+        plt.ylabel('Prev Win - Prev Loss ΔF/F Difference', fontsize=24)
+        plt.xticks(fontsize=20)
+        plt.yticks(fontsize=20)
+        plt.title(f'Previous Outcome Effect by State', fontsize=26)
+        plt.xlim([-pre_cue_time, post_cue_time])
+        #plt.legend(loc='upper right', fontsize=12)
+        plt.tight_layout()
+        
+        # Save the figure
+        save_figure(plt.gcf(), "all_subjects", "pooled", f"prev_outcome_diff_by_state_{split_suffix}_w{window_size}")
+        
+        plt.show()
+        
+        return {
+            'subject_id': 'All',
+            'specific_subjects': [result['subject_id'] for result in subject_results],
+            'window_size': window_size,
+            'threshold': threshold,
+            'split_biased': split_biased,
+            'time_axis': time_axis,
+            'cross_subject_data': cross_subject_data,
+            'cross_subject_averages': cross_subject_averages
+        }
+    
+    else:
+        # Single-subject analysis
+        return analyze_reward_rate_state_win_loss_single(subject_id, window_size, threshold, behavior_df, split_biased)
+
+def analyze_reward_rate_state_win_loss_single(subject_id, window_size=20, threshold=0.8, behavior_df=None, split_biased=True):
+    """
+    Analyze photometry signals based on smoothed reward rate and behavioral state for a single subject,
+    comparing win vs. loss signals and previous outcome effects.
+    
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    window_size : int, optional (default=20)
+        Size of moving window for calculating reward rates
+    threshold : float, optional (default=0.8)
+        Probability threshold for assigning trials to a state
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from parquet
+    split_biased : bool, optional (default=True)
+        If True, split biased trials into high/low reward rate groups
+        If False, treat all biased trials as a single group
+        
+    Returns:
+    --------
+    dict: Analysis results including win-loss differences and previous outcome effects
+         by state and reward rate category
+    """
+    print(f"Analyzing reward rate and state win-loss effects for {subject_id}...")
+    
+    subject_path = os.path.join(base_dir, subject_id)
+    
+    # Find all session directories for this subject
+    matching_pennies_sessions = set()
+    try:
+        if behavior_df is not None:
+            # If behavior_df is provided, filter it for this subject
+            subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
+        else:
+            # Otherwise load from parquet file
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            subject_data = df[(df['subjid'] == subject_id) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} from parquet file")
+    except Exception as e:
+        print(f"Warning: Could not load session info: {e}")
+
+    # Sort sessions chronologically, filtering to only include MatchingPennies sessions
+    sessions = sorted([d for d in os.listdir(subject_path)
+                      if os.path.isdir(os.path.join(subject_path, d)) and
+                      os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                      d in matching_pennies_sessions])
+    
+    # Define which states to track based on split_biased parameter
+    if split_biased:
+        states = ['stochastic', 'biased_high', 'biased_low']
+    else:
+        states = ['stochastic', 'biased']
+    
+    # Store all trials by state and outcome category
+    all_trials = {}
+    for state in states:
+        all_trials[state] = {
+            'win': [],           # Current win trials
+            'loss': [],          # Current loss trials
+            'prev_win': [],      # Trials where previous trial was a win
+            'prev_loss': []      # Trials where previous trial was a loss
+        }
+    
+    time_axis = None
+    total_sessions = 0
+    
+    # Store all biased trials' reward rates to calculate median for splitting
+    if split_biased:
+        all_biased_reward_rates = []
+    
+    # Process each session
+    for session_date in sessions:
+        print(f"Processing {subject_id}/{session_date}...")
+        
+        # Get session data from parquet file
+        session_df = behavior_df[(behavior_df['subjid'] == subject_id) & (behavior_df['date'] == session_date)]
+        
+        if session_df.empty:
+            print(f"No behavioral data found for {subject_id}/{session_date}")
+            continue
+        
+        # Get behavioral data
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
+        if not session_result:
+            continue
+        
+        # Store time axis from the first valid session
+        if time_axis is None:
+            time_axis = session_result['time_axis']
+        
+        # Skip sessions with too few trials
+        if len(session_result['non_m_trials']) < 100:
+            print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
+            continue
+        
+        total_sessions += 1
+        
+        # Get behavioral data
+        behavior_data = session_result['behavioral_data']
+        rewards = np.array(behavior_data['reward'])
+        choices = np.array(behavior_data['choice'])
+        
+        # Filter out missed trials
+        non_miss_mask = choices != 'M'
+        filtered_rewards = rewards[non_miss_mask]
+        
+        # Skip if not enough trials after filtering
+        if len(filtered_rewards) < window_size:
+            print(f"Skipping {subject_id}/{session_date}, insufficient non-missed trials after filtering")
+            continue
+        
+        # Get mapping from filtered indices to original indices
+        non_miss_indices = np.where(non_miss_mask)[0]
+        filtered_to_orig = {i: non_miss_indices[i] for i in range(len(non_miss_indices))}
+        
+        # Calculate overall session reward rate (for weighting early trials)
+        overall_reward_rate = np.mean(filtered_rewards)
+        
+        # Calculate moving average reward rates for each trial
+        reward_rates = []
+        
+        for i in range(len(filtered_rewards)):
+            if i < window_size:
+                # For early trials, use available data plus weighted overall rate
+                rewards_so_far = filtered_rewards[:i + 1]
+                available_weight = len(rewards_so_far) / window_size
+                rate = (np.mean(rewards_so_far) * available_weight +
+                        overall_reward_rate * (1 - available_weight))
+            else:
+                # For later trials, use full window
+                window_rewards = filtered_rewards[i - window_size + 1:i + 1]
+                rate = np.mean(window_rewards)
+            
+            reward_rates.append(rate)
+        
+        # If splitting biased trials, collect all biased trials' reward rates
+        if split_biased:
+            for i in range(len(session_df)):
+                if i < len(reward_rates):
+                    p_stochastic = session_df.iloc[i]['p_stochastic']
+                    p_leftbias = session_df.iloc[i]['p_leftbias']
+                    p_rightbias = session_df.iloc[i]['p_rightbias']
+                    
+                    # Only include clearly biased trials for median calculation
+                    if p_leftbias >= threshold or p_rightbias >= threshold:
+                        all_biased_reward_rates.append(reward_rates[i])
+        
+        # Process trials to categorize by state, reward rate, and outcome
+        for i in range(len(filtered_rewards)):
+            # Skip if this filtered index doesn't have state data
+            if i >= len(session_df):
+                continue
+            
+            # Get state for this trial
+            p_stochastic = session_df.iloc[i]['p_stochastic']
+            p_leftbias = session_df.iloc[i]['p_leftbias']
+            p_rightbias = session_df.iloc[i]['p_rightbias']
+            
+            # Skip uncertain trials
+            if p_stochastic < threshold and p_leftbias < threshold and p_rightbias < threshold:
+                continue
+            
+            # Get original index for this trial
+            orig_idx = filtered_to_orig[i]
+            
+            # Skip if no photometry data available for this trial
+            if orig_idx not in session_result["valid_trials"]:
+                continue
+            
+            # Get photometry data for this trial
+            valid_idx = np.where(np.array(session_result["valid_trials"]) == orig_idx)[0]
+            if len(valid_idx) == 0:
+                continue
+            
+            photo_data = session_result['epoched_data'][valid_idx[0]]
+            
+            # Determine state for this trial
+            if p_stochastic >= threshold:
+                state = 'stochastic'
+            elif split_biased:
+                # Store temporarily with reward rate - will categorize after computing median
+                if 'biased_temp' not in all_trials:
+                    all_trials['biased_temp'] = []
+                all_trials['biased_temp'].append({
+                    'photo_data': photo_data,
+                    'reward': filtered_rewards[i],
+                    'prev_reward': filtered_rewards[i-1] if i > 0 else None,
+                    'reward_rate': reward_rates[i]
+                })
+                continue  # Skip further processing for now
+            else:
+                state = 'biased'
+            
+            # Add trial to appropriate categories in all_trials
+            # By current outcome
+            if filtered_rewards[i] == 1:
+                all_trials[state]['win'].append(photo_data)
+            else:
+                all_trials[state]['loss'].append(photo_data)
+            
+            # By previous outcome (skip first trial)
+            if i > 0:
+                if filtered_rewards[i-1] == 1:
+                    all_trials[state]['prev_win'].append(photo_data)
+                else:
+                    all_trials[state]['prev_loss'].append(photo_data)
+    
+    if total_sessions == 0:
+        print(f"No valid sessions found for {subject_id}")
+        return None
+    
+    # If splitting biased trials, now categorize based on median reward rate
+    if split_biased and 'biased_temp' in all_trials and all_biased_reward_rates:
+        biased_median = np.median(all_biased_reward_rates)
+        print(f"Median reward rate for biased trials: {biased_median:.4f}")
+        
+        # Process biased trials based on reward rate
+        for trial in all_trials['biased_temp']:
+            photo_data = trial['photo_data']
+            reward = trial['reward']
+            prev_reward = trial['prev_reward']
+            reward_rate = trial['reward_rate']
+            
+            # Determine state based on reward rate
+            state = 'biased_high' if reward_rate >= biased_median else 'biased_low'
+            
+            # Add to appropriate categories
+            if reward == 1:
+                all_trials[state]['win'].append(photo_data)
+            else:
+                all_trials[state]['loss'].append(photo_data)
+            
+            if prev_reward is not None:
+                if prev_reward == 1:
+                    all_trials[state]['prev_win'].append(photo_data)
+                else:
+                    all_trials[state]['prev_loss'].append(photo_data)
+        
+        # Remove temporary storage
+        del all_trials['biased_temp']
+    
+    # Convert all trial data to numpy arrays
+    for state in all_trials:
+        for category in all_trials[state]:
+            if all_trials[state][category]:
+                all_trials[state][category] = np.array(all_trials[state][category])
+    
+    # Calculate averages for each state and condition
+    state_averages = {}
+    for state in all_trials:
+        state_averages[state] = {}
+        
+        for category in all_trials[state]:
+            if isinstance(all_trials[state][category], np.ndarray) and len(all_trials[state][category]) > 0:
+                # Calculate average across all trials in this category
+                state_averages[state][category] = {
+                    'avg': np.mean(all_trials[state][category], axis=0),
+                    'count': len(all_trials[state][category])
+                }
+            else:
+                state_averages[state][category] = {
+                    'avg': None,
+                    'count': 0
+                }
+    
+    # Calculate differences for win-loss and previous outcome
+    win_loss_diff = {}
+    prev_outcome_diff = {}
+    
+    for state in states:
+        # Calculate win-loss difference
+        if (state_averages[state]['win']['avg'] is not None and 
+            state_averages[state]['loss']['avg'] is not None):
+            win_loss_diff[state] = state_averages[state]['win']['avg'] - state_averages[state]['loss']['avg']
+        else:
+            win_loss_diff[state] = None
+        
+        # Calculate previous outcome effect
+        if (state_averages[state]['prev_win']['avg'] is not None and 
+            state_averages[state]['prev_loss']['avg'] is not None):
+            prev_outcome_diff[state] = state_averages[state]['prev_win']['avg'] - state_averages[state]['prev_loss']['avg']
+        else:
+            prev_outcome_diff[state] = None
+    
+    # Print counts for each state and category
+    print("\nTrial counts for each state and category:")
+    for state in sorted(all_trials.keys()):
+        print(f"\n{state.upper()} state:")
+        for category in sorted(all_trials[state].keys()):
+            count = state_averages[state][category]['count']
+            print(f"  {category}: {count} trials")
+    
+    # Define colors for each state
+    if split_biased:
+        colors = {
+            'stochastic': 'green',
+            'biased_low': 'red',
+            'biased_high': 'blue'
+        }
+        
+        labels = {
+            'stochastic': 'Stochastic',
+            'biased_low': 'Biased (Low Reward Rate)',
+            'biased_high': 'Biased (High Reward Rate)'
+        }
+    else:
+        colors = {
+            'stochastic': 'green',
+            'biased': 'purple'
+        }
+        
+        labels = {
+            'stochastic': 'Stochastic',
+            'biased': 'Biased'
+        }
+    
+    # Create plots
+    
+    # 1. Win-Loss difference plot
+    plt.figure(figsize=(12, 7))
+    
+    for state, color in colors.items():
+        if win_loss_diff[state] is not None:
+            plt.plot(time_axis, win_loss_diff[state], color=color, linewidth=2,
+                   label=f"{labels[state]} (win n={state_averages[state]['win']['count']}, loss n={state_averages[state]['loss']['count']})")
+    
+    # Add vertical line at cue onset
+    plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+    plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+    
+    plt.xlabel('Time (s)', fontsize=16)
+    plt.ylabel('Win - Loss ΔF/F Difference', fontsize=16)
+    split_status = "Split Biased" if split_biased else "Combined Biased"
+    plt.title(f'Win-Loss Signal Difference by State ({split_status}): {subject_id}', fontsize=20)
+    plt.xlim([-pre_cue_time, post_cue_time])
+    plt.legend(loc='upper right', fontsize=12)
+    plt.tight_layout()
+    
+    # Save the figure with appropriate suffix
+    split_suffix = "split" if split_biased else "combined"
+    save_figure(plt.gcf(), subject_id, "pooled", f"win_loss_diff_by_state_{split_suffix}_w{window_size}")
+    
+    plt.show()
+    
+    # 2. Previous Outcome difference plot
+    plt.figure(figsize=(12, 7))
+    
+    for state, color in colors.items():
+        if prev_outcome_diff[state] is not None:
+            plt.plot(time_axis, prev_outcome_diff[state], color=color, linewidth=2,
+                   label=f"{labels[state]} (prev win n={state_averages[state]['prev_win']['count']}, prev loss n={state_averages[state]['prev_loss']['count']})")
+    
+    # Add vertical line at cue onset
+    plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+    plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+    
+    plt.xlabel('Time (s)', fontsize=16)
+    plt.ylabel('Prev Win - Prev Loss ΔF/F Difference', fontsize=16)
+    plt.title(f'Previous Outcome Effect by State ({split_status}): {subject_id}', fontsize=20)
+    plt.xlim([-pre_cue_time, post_cue_time])
+    plt.legend(loc='upper right', fontsize=12)
+    plt.tight_layout()
+    
+    # Save the figure
+    save_figure(plt.gcf(), subject_id, "pooled", f"prev_outcome_diff_by_state_{split_suffix}_w{window_size}")
+    
+    plt.show()
+    
+    return {
+        'subject_id': subject_id,
+        'window_size': window_size,
+        'threshold': threshold,
+        'split_biased': split_biased,
+        'time_axis': time_axis,
+        'total_sessions': total_sessions,
+        'state_averages': state_averages,
+        'win_loss_diff': win_loss_diff,
+        'prev_outcome_diff': prev_outcome_diff
+    }
+
+def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_conf=False, behavior_df=None, sem=True, state_sort=False):
+    """
+    Analyze win-loss difference across photometry sessions for a subject
+
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    session_date : str, optional
+        Specific session to analyze. If None, analyze all sessions.
+    comp_conf : bool, optional
+        If True, sorts sessions by computer confidence rather than chronologically
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded dataframe to use for confidence calculations
+    sem : bool, optional
+        If True, display shaded standard error of the mean regions
+    state_sort : bool, optional
+        If True (and comp_conf is False), sort sessions by percentage of stochastic trials
+
+    Returns:
+    --------
+    dict: Dictionary of session win-loss difference analyses
+    """
+    if session_date is None:
+        if behavior_df is not None:
+            # Get sessions from the provided dataframe
+            sessions = sorted(behavior_df[behavior_df['subjid'] == subject_id]['date'].unique())
+        else:
+            # Get sessions from the filesystem
+            subject_path = os.path.join(base_dir, subject_id)
+            sessions = sorted([d for d in os.listdir(subject_path)
+                               if os.path.isdir(os.path.join(subject_path, d)) and
+                               os.path.exists(os.path.join(subject_path, d, "deltaff.npy"))])
+    else:
+        sessions = [session_date]
+
+    # Load dataframe if needed for confidence calculations and not provided
+    if (comp_conf or state_sort) and behavior_df is None:
+        try:
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            print(f"Loaded parquet data for confidence/state calculations")
+        except Exception as e:
+            print(f"Error loading parquet data: {e}")
+            comp_conf = False  # Fallback to chronological sorting
+            state_sort = False
+    else:
+        df = behavior_df  
+
+    # Store results for each session
+    session_differences = {}
+    session_confidences = {}
+    session_stochastic_pcts = {}
+
+    # Define threshold for stochastic state
+    stochastic_threshold = 0.8
+
+    # Process each session
+    for idx, session_date in enumerate(sessions):
+        # Process the session
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df, z_score=False)
+        if not session_result:
+            print(f"Could not process session {subject_id}/{session_date}")
+            continue
+
+        if len(session_result['non_m_trials']) < 100:
+            print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
+            continue
+
+        # Filter out missed trials
+        non_m_indices = np.array([i for i, idx in enumerate(session_result["valid_trials"]) 
+                                  if idx in session_result["non_m_trials"]])
+
+        # Get reward outcomes and photometry data
+        reward_outcomes = session_result["reward_outcomes"][non_m_indices]
+        session_plots = session_result['plotting_data']
+
+        # Separate rewarded and unrewarded trials
+        rewarded_trials = session_plots[reward_outcomes == 1]
+        unrewarded_trials = session_plots[reward_outcomes == 0]
+
+        # Compute average rewarded and unrewarded signals with SEM
+        rewarded_avg = np.mean(rewarded_trials, axis=0)
+        unrewarded_avg = np.mean(unrewarded_trials, axis=0)
+        rewarded_sem = calculate_sem(rewarded_trials, axis=0)
+        unrewarded_sem = calculate_sem(unrewarded_trials, axis=0)
+
+        # Compute win-loss difference
+        rewarded_avg = rewarded_avg + np.abs(np.min([rewarded_avg, unrewarded_avg]))
+        unrewarded_avg = unrewarded_avg + np.abs(np.min([rewarded_avg, unrewarded_avg]))
+        win_loss_diff = rewarded_avg - unrewarded_avg
+        win_loss_sem = np.sqrt(rewarded_sem**2 + unrewarded_sem**2)
+
+        # Store the difference data
+        session_differences[session_date] = {
+            'diff': win_loss_diff,
+            'sem': win_loss_sem,
+            'time_axis': session_result['time_axis']
+        }
+
+        # Calculate stochastic state percentage for this session
+        try:
+            # Get data for this session
+            session_df = df[(df['subjid'] == subject_id) & (df['date'] == session_date)]
+            
+            if session_df.empty:
+                print(f"No behavioral data found for {subject_id}/{session_date}")
+                continue
+            
+            # Calculate stochastic state percentage
+            if 'p_stochastic' in session_df.columns:
+                total_trials = len(session_df)
+                stochastic_trials = sum(session_df['p_stochastic'] >= stochastic_threshold)
+                stochastic_pct = (stochastic_trials / total_trials) * 100
+                
+                session_stochastic_pcts[session_date] = stochastic_pct
+                print(f"Session {session_date}: {stochastic_pct:.1f}% stochastic trials ({stochastic_trials}/{total_trials})")
+            else:
+                print(f"No p_stochastic column found in data for {subject_id}/{session_date}")
+        except Exception as e:
+            print(f"Error calculating stochastic percentage for {subject_id}/{session_date}: {e}")
+
+        # Calculate computer confidence if requested
+        if comp_conf:
+            try:
+                # Extract p-values and calculate confidence
+                if 'min_pvalue' in session_df.columns:
+                    # Extract p-values
+                    p_values = session_df['min_pvalue'].values
+                    
+                    # Remove NaN values
+                    p_values = p_values[~np.isnan(p_values)]
+                    
+                    if len(p_values) == 0:
+                        print(f"No valid p-values for {subject_id}/{session_date}")
+                        continue
+                    
+                    # Cap very small p-values at 10^-12 to avoid infinite confidence
+                    min_p_value = 1e-12
+                    p_values = np.maximum(p_values, min_p_value)
+                    
+                    # Calculate confidence as -log10(p_value)
+                    confidence = -np.log10(p_values)
+                    
+                    # Calculate average confidence for the session
+                    avg_confidence = np.mean(confidence)
+                    session_confidences[session_date] = avg_confidence
+                    print(f"Session {session_date} average confidence: {avg_confidence:.4f}")
+                else:
+                    print(f"No min_pvalue column found in data for {subject_id}/{session_date}")
+            except Exception as e:
+                print(f"Error calculating confidence for {subject_id}/{session_date}: {e}")
+
+    # Check if we have any valid sessions
+    if not session_differences:
+        print(f"No valid sessions found for {subject_id}")
+        return None
+
+    # Determine sort mode and filter sessions accordingly
+    if comp_conf and session_confidences:
+        # Sort by computer confidence
+        # Filter out sessions with missing confidence values
+        valid_sessions = [s for s in session_confidences.keys() if s in session_differences]
+        
+        if not valid_sessions:
+            print("No sessions with valid confidence values found")
+            sorted_sessions = sorted(session_differences.keys())
+        else:
+            # Sort by confidence (highest first)
+            sorted_sessions = sorted(valid_sessions, key=lambda s: session_confidences.get(s, 0), reverse=True)
+            
+            # Print the confidence ranking
+            print("\nSessions ranked by computer confidence (highest to lowest):")
+            for i, sess in enumerate(sorted_sessions):
+                stoch_info = f", {session_stochastic_pcts.get(sess, 0):.1f}% stochastic" if sess in session_stochastic_pcts else ""
+                print(f"{i+1}. Session {sess}: conf={session_confidences[sess]:.4f}{stoch_info}")
+        
+        sort_method = "by computer confidence"
+    elif state_sort and session_stochastic_pcts:
+        # Sort by stochastic percentage
+        # Filter out sessions with missing stochastic percentage values
+        valid_sessions = [s for s in session_stochastic_pcts.keys() if s in session_differences]
+        
+        if not valid_sessions:
+            print("No sessions with valid stochastic percentages found")
+            sorted_sessions = sorted(session_differences.keys())
+        else:
+            # Sort by stochastic percentage (lowest first)
+            sorted_sessions = sorted(valid_sessions, key=lambda s: session_stochastic_pcts.get(s, 0))
+            
+            # Print the stochastic percentage ranking
+            print("\nSessions ranked by stochastic state percentage (lowest to highest):")
+            for i, sess in enumerate(sorted_sessions):
+                print(f"{i+1}. Session {sess}: {session_stochastic_pcts[sess]:.1f}% stochastic")
+        
+        sort_method = "by stochastic percentage"
+    else:
+        # Use chronological sorting (default)
+        sorted_sessions = sorted(session_differences.keys())
+        sort_method = "chronologically"
+
+    # Create colors for plotting
+    num_sessions = len(sorted_sessions)
+    
+    # Set colormap based on sort method
+    if subject_id == "JOA-M-0020":
+        # Special coloring for JOA-M-0020: Yellow -> Green -> Blue gradient (viridis-like)
+        colors = plt.cm.viridis(np.linspace(0, 1, num_sessions))
+    elif state_sort:
+        # For stochastic percentage sorting: Blue (low %) to Yellow (high %)
+        colors = plt.cm.viridis(np.linspace(0, 1, num_sessions))
+    else:
+        # Regular Blues colormap for other subjects and sort methods
+        if comp_conf and session_confidences:
+            # When sorting by confidence, use reversed color gradient (highest confidence = lightest blue)
+            colors = plt.cm.Blues(np.linspace(0.3, 1, num_sessions))
+        else:
+            # Default: earliest session = lightest blue
+            colors = plt.cm.Blues(np.linspace(0.3, 1, num_sessions))
+
+    # Create plot
+    plt.figure(figsize=(12, 7))
+    chronological_sessions = sorted(session_differences.keys())
+
+    # Create mapping from session date to chronological position (1-indexed)
+    chronological_order = {sess_date: idx+1 for idx, sess_date in enumerate(chronological_sessions)}
+
+    # Plot each session's win-loss difference
+    for idx, sess_date in enumerate(sorted_sessions):
+        time_axis = session_differences[sess_date]['time_axis']
+        win_loss_diff = session_differences[sess_date]['diff']
+        win_loss_sem = session_differences[sess_date]['sem']
+        
+        # Create label with relevant info (confidence or stochastic percentage)
+        label_parts = [f'Session {chronological_order[sess_date]}']
+        
+        if comp_conf and sess_date in session_confidences:
+            label_parts.append(f'conf: {session_confidences[sess_date]:.2f}')
+            
+        if sess_date in session_stochastic_pcts:
+            label_parts.append(f'{session_stochastic_pcts[sess_date]:.1f}% stoch')
+            
+        label = f'{", ".join(label_parts)}'
+        
+        # Plot with shaded error region
+        if sem:
+            plt.fill_between(time_axis,
+                            win_loss_diff - win_loss_sem,
+                            win_loss_diff + win_loss_sem,
+                            color=colors[idx], alpha=0.2)
+        plt.plot(time_axis, win_loss_diff,
+                color=colors[idx],
+                label=label, linewidth=2)
+
+    # Add reference lines
+    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5)
+    plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+
+    # Labels and formatting
+    plt.xlabel('Time (s) after first lick', fontsize=24)
+    plt.ylabel('Rewarded - Unrewarded ΔF/F', fontsize=24)
+    plt.tick_params(axis='both', which='major', labelsize=20)
+    
+    plt.title(f'Win-Loss Difference: {subject_id} (sorted {sort_method})', fontsize=26)
+    
+    plt.xlim([-pre_cue_time, post_cue_time])
+    plt.legend(loc='upper right')
+    plt.tight_layout()
+
+    # Save the figure
+    if comp_conf:
+        sort_suffix = "by_comp_conf"
+    elif state_sort:
+        sort_suffix = "by_stochastic_pct"
+    else:
+        sort_suffix = "chronological"
+        
+    sem_suffix = "_sem" if sem else ""
+    save_figure(plt.gcf(), subject_id, "win_loss_diff", f"win_loss_difference_{sort_suffix}{sem_suffix}")
+
+    plt.show()
+
+    # Return results
+    return {
+        'session_differences': session_differences,
+        'session_confidences': session_confidences if comp_conf else None,
+        'session_stochastic_pcts': session_stochastic_pcts,
+        'sorted_sessions': sorted_sessions
+    }
+
+def analyze_confidence_stochastic_relationship(subject_id, session_date=None, behavior_df=None, window_size=20):
+    """
+    Analyze the relationship between computer confidence and percentage of stochastic trials,
+    either across multiple sessions or within a single session.
+    
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    session_date : str, optional
+        Specific session to analyze in detail. If None, analyze all sessions.
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from parquet
+    window_size : int, optional (default=20)
+        Size of moving window for calculating rolling averages within a session
+        
+    Returns:
+    --------
+    dict: Analysis results including confidence and stochastic percentages
+    """
+    print(f"Analyzing confidence and stochastic relationship for {subject_id}...")
+    
+    # Load behavior data if not provided
+    if behavior_df is None:
+        try:
+            behavior_df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            behavior_df['date'] = behavior_df['date'].astype(str)
+            print(f"Loaded behavior data from parquet file")
+        except Exception as e:
+            print(f"Error loading behavior data: {e}")
+            return None
+    
+    # Filter data for this subject
+    subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+    
+    # Check if we have required columns
+    required_columns = ['date', 'p_stochastic', 'min_pvalue']
+    if not all(col in subject_data.columns for col in required_columns):
+        print(f"Missing required columns in behavior data: need {required_columns}")
+        return None
+    
+    # Define threshold for stochastic state
+    stochastic_threshold = 0.8
+    
+    if session_date is None:
+        # Cross-session analysis
+        print("\nAnalyzing across multiple sessions...")
+        
+        # Get all sessions for this subject
+        sessions = sorted(subject_data['date'].unique())
+        
+        # Store results for each session
+        session_results = []
+        
+        # Process each session
+        for idx, sess_date in enumerate(sessions):
+            sess_data = subject_data[subject_data['date'] == sess_date]
+            
+            if len(sess_data) < 50:  # Skip sessions with too few trials
+                print(f"Skipping session {sess_date}, too few trials: {len(sess_data)}")
+                continue
+            
+            # Calculate stochastic percentage
+            stochastic_trials = sum(sess_data['p_stochastic'] >= stochastic_threshold)
+            total_trials = len(sess_data)
+            stochastic_pct = (stochastic_trials / total_trials) * 100
+            
+            # Calculate computer confidence
+            p_values = sess_data['min_pvalue'].values
+            p_values = p_values[~np.isnan(p_values)]  # Remove NaN values
+            
+            if len(p_values) == 0:
+                print(f"No valid p-values for {sess_date}, skipping")
+                continue
+            
+            # Cap very small p-values to avoid infinite confidence
+            min_p_value = 1e-12
+            p_values = np.maximum(p_values, min_p_value)
+            
+            # Calculate confidence as -log10(p_value)
+            confidence = -np.log10(p_values)
+            avg_confidence = np.mean(confidence)
+            
+            # Store session results
+            session_results.append({
+                'session_date': sess_date,
+                'session_idx': idx + 1,  # 1-indexed session number
+                'stochastic_pct': stochastic_pct,
+                'confidence': avg_confidence,
+                'total_trials': total_trials
+            })
+            
+            print(f"Session {idx+1} ({sess_date}): {stochastic_pct:.1f}% stochastic, confidence={avg_confidence:.4f}")
+        
+        if not session_results:
+            print("No valid sessions found")
+            return None
+        
+        # Create normalized versions for plotting
+        stochastic_values = [res['stochastic_pct'] for res in session_results]
+        confidence_values = [res['confidence'] for res in session_results]
+        
+        stochastic_min = min(stochastic_values)
+        stochastic_max = max(stochastic_values)
+        confidence_min = min(confidence_values)
+        confidence_max = max(confidence_values)
+        
+        # Normalize to 0-1 range
+        normalized_stochastic = [(x - stochastic_min) / (stochastic_max - stochastic_min) 
+                                if stochastic_max > stochastic_min else 0.5 for x in stochastic_values]
+        
+        normalized_confidence = [(x - confidence_min) / (confidence_max - confidence_min) 
+                               if confidence_max > confidence_min else 0.5 for x in confidence_values]
+        
+        # Create plot
+        plt.figure(figsize=(12, 7))
+        
+        # X-axis values: session numbers
+        x_values = [res['session_idx'] for res in session_results]
+        
+        # Plot normalized values
+        plt.plot(x_values, normalized_stochastic, 'go-', linewidth=2, markersize=8, 
+                label=f'Stochastic % (range: {stochastic_min:.1f}% - {stochastic_max:.1f}%)')
+        
+        plt.plot(x_values, normalized_confidence, 'bo-', linewidth=2, markersize=8,
+                label=f'Confidence (range: {confidence_min:.2f} - {confidence_max:.2f})')
+        
+        # Add reference line at 0.5
+        plt.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5)
+        
+        # Create second y-axis for original values
+        ax1 = plt.gca()
+        ax2 = ax1.twinx()
+        
+        # Plot original values on second y-axis
+        ax2.plot(x_values, stochastic_values, 'go-', alpha=0)  # Invisible, just to set scale
+        ax2.plot(x_values, confidence_values, 'bo-', alpha=0)  # Invisible, just to set scale
+        
+        # Configure primary y-axis (normalized)
+        ax1.set_ylabel('Normalized Value', fontsize=16)
+        ax1.set_ylim([-0.05, 1.05])
+        ax1.tick_params(axis='y', labelcolor='black')
+        
+        # Configure secondary y-axes
+        ax2.set_ylabel('Original Values', fontsize=16)
+        ax2.tick_params(axis='y', labelcolor='gray')
+        
+        # X-axis formatting
+        plt.xlabel('Session Number', fontsize=16)
+        plt.xticks(x_values)
+        
+        plt.title(f'Stochastic Percentage and Computer Confidence by Session: {subject_id}', fontsize=20)
+        plt.grid(alpha=0.3)
+        plt.legend(loc='upper left', fontsize=12)
+        
+        plt.tight_layout()
+        
+        # Save figure
+        save_figure(plt.gcf(), subject_id, "analysis", "session_stochastic_confidence")
+        
+        plt.show()
+        
+        # Calculate correlation
+        correlation = np.corrcoef(stochastic_values, confidence_values)[0, 1]
+        print(f"\nCorrelation between stochastic percentage and confidence: {correlation:.4f}")
+        
+        return {
+            'subject_id': subject_id,
+            'session_results': session_results,
+            'correlation': correlation
+        }
+    
+    else:
+        # Single session analysis
+        print(f"\nAnalyzing single session: {session_date}")
+        
+        # Get data for the specific session
+        sess_data = subject_data[subject_data['date'] == session_date]
+        
+        if len(sess_data) < 50:
+            print(f"Not enough trials in session {session_date}: {len(sess_data)}")
+            return None
+            
+        # Sort by trial index to ensure correct order
+        if 'trial_idx' in sess_data.columns:
+            sess_data = sess_data.sort_values('trial_idx')
+        
+        # Calculate across-session averages to use for early trials
+        overall_stochastic_pct = (subject_data['p_stochastic'] >= stochastic_threshold).mean() * 100
+        
+        # For confidence, first handle NaNs and cap minimum p-values
+        p_values = subject_data['min_pvalue'].values
+        p_values = p_values[~np.isnan(p_values)]
+        min_p_value = 1e-12
+        p_values = np.maximum(p_values, min_p_value)
+        overall_confidence = np.mean(-np.log10(p_values))
+        
+        # Extract data from session
+        p_stochastic = sess_data['p_stochastic'].values
+        p_values = sess_data['min_pvalue'].values
+        
+        # Prepare arrays to store moving averages
+        stochastic_moving_avg = []
+        confidence_moving_avg = []
+        
+        # Calculate moving averages for each trial
+        for i in range(len(sess_data)):
+            # For stochastic percentage
+            if i < window_size:
+                # For early trials, weight in the overall average
+                stoch_so_far = (p_stochastic[:i+1] >= stochastic_threshold).mean() * 100
+                available_weight = (i+1) / window_size
+                stoch_avg = stoch_so_far * available_weight + overall_stochastic_pct * (1 - available_weight)
+            else:
+                # For later trials, use full window
+                stoch_window = p_stochastic[i-window_size+1:i+1]
+                stoch_avg = (stoch_window >= stochastic_threshold).mean() * 100
+            
+            stochastic_moving_avg.append(stoch_avg)
+            
+            # For computer confidence
+            if i < window_size:
+                # Extract p-values for trials so far
+                p_window = p_values[:i+1]
+                # Remove NaN values
+                p_window = p_window[~np.isnan(p_window)]
+                
+                if len(p_window) > 0:
+                    # Cap minimum p-values
+                    p_window = np.maximum(p_window, min_p_value)
+                    # Calculate confidence
+                    conf_so_far = np.mean(-np.log10(p_window))
+                    available_weight = (i+1) / window_size
+                    conf_avg = conf_so_far * available_weight + overall_confidence * (1 - available_weight)
+                else:
+                    conf_avg = overall_confidence
+            else:
+                # Extract p-values for this window
+                p_window = p_values[i-window_size+1:i+1]
+                # Remove NaN values
+                p_window = p_window[~np.isnan(p_window)]
+                
+                if len(p_window) > 0:
+                    # Cap minimum p-values
+                    p_window = np.maximum(p_window, min_p_value)
+                    # Calculate confidence
+                    conf_avg = np.mean(-np.log10(p_window))
+                else:
+                    conf_avg = None
+            
+            confidence_moving_avg.append(conf_avg)
+        
+        # Convert to numpy arrays for easier manipulation
+        stochastic_moving_avg = np.array(stochastic_moving_avg)
+        confidence_moving_avg = np.array(confidence_moving_avg, dtype=float)
+        
+        # Filter out any None values in confidence
+        valid_indices = ~np.isnan(confidence_moving_avg)
+        
+        if sum(valid_indices) < 50:
+            print(f"Not enough valid confidence data points in session: {sum(valid_indices)}")
+            return None
+        
+        # Create normalized versions for plotting
+        stochastic_min = np.min(stochastic_moving_avg)
+        stochastic_max = np.max(stochastic_moving_avg)
+        confidence_min = np.min(confidence_moving_avg[valid_indices])
+        confidence_max = np.max(confidence_moving_avg[valid_indices])
+        
+        # Normalize to 0-1 range
+        normalized_stochastic = (stochastic_moving_avg - stochastic_min) / (stochastic_max - stochastic_min)
+        
+        normalized_confidence = np.full_like(confidence_moving_avg, np.nan)
+        normalized_confidence[valid_indices] = (confidence_moving_avg[valid_indices] - confidence_min) / (confidence_max - confidence_min)
+        
+        # Create plot
+        plt.figure(figsize=(12, 7))
+        
+        # X-axis values: trial indices
+        x_values = np.arange(1, len(sess_data) + 1)
+        
+        # Plot normalized values
+        plt.plot(x_values, normalized_stochastic, 'g-', linewidth=2,
+                label=f'Stochastic % (range: {stochastic_min:.1f}% - {stochastic_max:.1f}%)')
+        
+        plt.plot(x_values, normalized_confidence, 'b-', linewidth=2,
+                label=f'Confidence (range: {confidence_min:.2f} - {confidence_max:.2f})')
+        
+        # Add reference line at 0.5
+        plt.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5)
+        
+        # Create second y-axis for original values
+        ax1 = plt.gca()
+        ax2 = ax1.twinx()
+        
+        # Plot original values on second y-axis
+        ax2.plot(x_values, stochastic_moving_avg, 'g-', alpha=0)  # Invisible, just to set scale
+        ax2.plot(x_values[valid_indices], confidence_moving_avg[valid_indices], 'b-', alpha=0)  # Invisible, just to set scale
+        
+        # Configure primary y-axis (normalized)
+        ax1.set_ylabel('Normalized Value', fontsize=16)
+        ax1.set_ylim([-0.05, 1.05])
+        ax1.tick_params(axis='y', labelcolor='black')
+        
+        
+        # X-axis formatting
+        plt.xlabel('Trial Number', fontsize=16)
+        
+        plt.title(f'Moving Average ({window_size} trials) of\nStochastic Percentage and Computer Confidence: {subject_id}, {session_date}', fontsize=20)
+        plt.grid(alpha=0.3)
+        plt.legend(loc='upper right', fontsize=12)
+        
+        plt.tight_layout()
+        
+        # Save figure
+        save_figure(plt.gcf(), subject_id, session_date, "trial_stochastic_confidence")
+        
+        plt.show()
+        
+        # Calculate correlation
+        valid_stoch = stochastic_moving_avg[valid_indices]
+        valid_conf = confidence_moving_avg[valid_indices]
+        correlation = np.corrcoef(valid_stoch, valid_conf)[0, 1]
+        print(f"\nCorrelation between stochastic percentage and confidence: {correlation:.4f}")
+        
+        return {
+            'subject_id': subject_id,
+            'session_date': session_date,
+            'stochastic_moving_avg': stochastic_moving_avg,
+            'confidence_moving_avg': confidence_moving_avg,
+            'correlation': correlation,
+            'window_size': window_size
+        }
+
+
+def analyze_state_period_photometry(subject_id="All", threshold=0.8, behavior_df=None, specific_subjects=None):
+    """
+    Analyze photometry signals during different periods of behavioral states (early, middle, late)
+    and during state transitions (early transition, late transition).
+    
+    States are separated into stochastic, leftbiased, and rightbiased. The function identifies
+    state transitions between any two different states, and analyzes both within-state periods
+    and transition periods.
+    
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject or "All" for cross-subject analysis
+    threshold : float, optional (default=0.8)
+        Probability threshold for assigning trials to a state
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from file
+    specific_subjects : list, optional
+        List of subject IDs to include if subject_id="All"
+    
+    Returns:
+    --------
+    dict: Analysis results including photometry signals by state period
+    """
+    if subject_id == "All":
+        # Cross-subject analysis
+        if behavior_df is None:
+            print("Loading behavior data for all subjects...")
+            behavior_df = load_filtered_behavior_data("MatchingPennies")
+        
+        # Default list of subjects
+        if specific_subjects is None:
+            specific_subjects = ["JOA-M-0022", "JOA-M-0023", "JOA-M-0024", "JOA-M-0025", "JOA-M-0026"]
+            print(f"Using default subject list: {specific_subjects}")
+        
+        # Container for subject-level results
+        subject_results = []
+        
+        # Process each subject individually
+        for subj in specific_subjects:
+            print(f"\nProcessing subject {subj} for state period analysis...")
+            try:
+                # Process individual subject
+                subj_result = analyze_state_period_photometry_single(subj, threshold, behavior_df)
+                if subj_result:
+                    subject_results.append(subj_result)
+            except Exception as e:
+                print(f"Error processing subject {subj}: {e}")
+                traceback.print_exc()
+        
+        if not subject_results:
+            print("No valid subjects found for cross-subject analysis")
+            return None
+        
+        # Define state types
+        state_types = ['stochastic', 'leftbiased', 'rightbiased']
+        
+        # Define the period categories
+        within_periods = []
+        for state in state_types:
+            within_periods.extend([f"{state}_early", f"{state}_middle", f"{state}_late"])
+        
+        # Define transition periods
+        transition_periods = []
+        for target_state in state_types:
+            for source_state in state_types:
+                if source_state != target_state:
+                    transition_periods.extend([
+                        f"to_{target_state}_from_{source_state}_early",
+                        f"to_{target_state}_from_{source_state}_late"
+                    ])
+        
+        # Combined period list
+        periods = within_periods + transition_periods
+        
+        # Store time axis from first subject
+        time_axis = None
+        for result in subject_results:
+            if 'time_axis' in result and result['time_axis'] is not None:
+                time_axis = result['time_axis']
+                break
+        
+        if time_axis is None:
+            print("No time axis found in subject results")
+            return None
+        
+        # Collect data for each period across subjects
+        cross_subject_data = {period: [] for period in periods}
+        
+        for result in subject_results:
+            for period in periods:
+                if period in result['period_data'] and result['period_data'][period]['avg'] is not None:
+                    # Add this subject's average for this period
+                    cross_subject_data[period].append(result['period_data'][period]['avg'])
+        
+        # Calculate cross-subject averages and SEMs
+        cross_subject_averages = {}
+        for period in periods:
+            if len(cross_subject_data[period]) > 0:
+                period_data = np.array(cross_subject_data[period])
+                cross_subject_averages[period] = {
+                    'avg': np.mean(period_data, axis=0),
+                    'sem': np.std(period_data, axis=0) / np.sqrt(len(period_data)),
+                    'count': len(period_data)
+                }
+            else:
+                cross_subject_averages[period] = {
+                    'avg': None,
+                    'sem': None,
+                    'count': 0
+                }
+        
+        # Create plots for cross-subject analysis
+        
+        # 1. Plot all transition periods together
+        plt.figure(figsize=(14, 8))
+        
+        # Define colors for transition periods
+        transition_colors = {
+            'stochastic': 'green',
+            'leftbiased': 'blue',
+            'rightbiased': 'red'
+        }
+        
+        # Plot all transitions grouped by target state, separating early and late
+        for target_state in state_types:
+            for transition_phase in ['early', 'late']:
+                # Combine data from transitions to this target state from all source states
+                target_periods = [p for p in transition_periods if f"to_{target_state}" in p and p.endswith(f"_{transition_phase}")]
+                
+                # Skip if no data
+                if not any(cross_subject_averages[p]['avg'] is not None for p in target_periods):
+                    continue
+                
+                # Combine averages across all source states
+                valid_avgs = [cross_subject_averages[p]['avg'] for p in target_periods 
+                             if cross_subject_averages[p]['avg'] is not None]
+                
+                if not valid_avgs:
+                    continue
+                    
+                combined_avg = np.mean(valid_avgs, axis=0)
+                
+                # Calculate combined SEM
+                valid_sems = [cross_subject_averages[p]['sem'] for p in target_periods 
+                             if cross_subject_averages[p]['sem'] is not None]
+                combined_sem = np.sqrt(np.mean([sem**2 for sem in valid_sems], axis=0))
+                
+                # Count total subjects
+                total_count = sum(cross_subject_averages[p]['count'] for p in target_periods)
+                
+                # Line style based on transition phase
+                linestyle = '-' if transition_phase == 'early' else '--'
+                
+                # Plot combined transition data
+                plt.fill_between(time_axis,
+                              combined_avg - combined_sem,
+                              combined_avg + combined_sem,
+                              color=transition_colors[target_state], alpha=0.2)
+                
+                plt.plot(time_axis, combined_avg,
+                       color=transition_colors[target_state], linestyle=linestyle, linewidth=2,
+                       label=f"To {target_state.capitalize()} ({transition_phase}, n={total_count})")
+        
+        # Add vertical line at cue onset
+        plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+        plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        
+        plt.xlabel('Time (s) after first lick', fontsize=16)
+        plt.ylabel('z-ΔF/F', fontsize=16)
+        plt.title('Transition Period Photometry Signals (All Subjects)', fontsize=20)
+        plt.xlim([-pre_cue_time, post_cue_time])
+        plt.legend(loc='upper right', fontsize=12)
+        plt.tight_layout()
+        
+        save_figure(plt.gcf(), "all_subjects", "pooled", "all_transitions_photometry")
+        plt.show()
+        
+        # 2. Create individual plots for each target state's transitions
+        for target_state in state_types:
+            plt.figure(figsize=(12, 7))
+            
+            # Plot transitions to this target state from each source state
+            for source_state in [s for s in state_types if s != target_state]:
+                for phase in ['early', 'late']:
+                    period = f"to_{target_state}_from_{source_state}_{phase}"
+                    
+                    if cross_subject_averages[period]['avg'] is not None:
+                        avg = cross_subject_averages[period]['avg']
+                        sem = cross_subject_averages[period]['sem']
+                        count = cross_subject_averages[period]['count']
+                        
+                        # Determine color based on source state
+                        color = transition_colors[source_state]
+                        
+                        # Line style based on transition phase
+                        linestyle = '-' if phase == 'early' else '--'
+                        
+                        plt.fill_between(time_axis,
+                                      avg - sem,
+                                      avg + sem,
+                                      color=color, alpha=0.2)
+                        
+                        plt.plot(time_axis, avg,
+                               color=color, linestyle=linestyle, linewidth=2,
+                               label=f"From {source_state.capitalize()} ({phase}, n={count})")
+            
+            # Add vertical line at cue onset
+            plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+            plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+            
+            plt.xlabel('Time (s) after first lick', fontsize=16)
+            plt.ylabel('z-ΔF/F', fontsize=16)
+            plt.title(f'Transitions to {target_state.capitalize()} State (All Subjects)', fontsize=20)
+            plt.xlim([-pre_cue_time, post_cue_time])
+            plt.legend(loc='upper right', fontsize=12)
+            plt.tight_layout()
+            
+            save_figure(plt.gcf(), "all_subjects", "pooled", f"transitions_to_{target_state}")
+            plt.show()
+        
+        # 3. Plot within-state periods for each state
+        for state in state_types:
+            plt.figure(figsize=(12, 7))
+            
+            # Define colors for within-state periods
+            within_colors = {
+                'early': 'lightblue',
+                'middle': 'blue',
+                'late': 'darkblue'
+            }
+            
+            # Plot each period within this state
+            for period_type in ['early', 'middle', 'late']:
+                period = f"{state}_{period_type}"
+                
+                if cross_subject_averages[period]['avg'] is not None:
+                    avg = cross_subject_averages[period]['avg']
+                    sem = cross_subject_averages[period]['sem']
+                    count = cross_subject_averages[period]['count']
+                    
+                    plt.fill_between(time_axis,
+                                  avg - sem,
+                                  avg + sem,
+                                  color=within_colors[period_type], alpha=0.3)
+                    
+                    plt.plot(time_axis, avg,
+                           color=within_colors[period_type], linewidth=2,
+                           label=f"{period_type.capitalize()} (n={count})")
+            
+            # Add vertical line at cue onset
+            plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+            plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+            
+            plt.xlabel('Time (s) after first lick', fontsize=16)
+            plt.ylabel('z-ΔF/F', fontsize=16)
+            plt.title(f'{state.capitalize()} State Periods (All Subjects)', fontsize=20)
+            plt.xlim([-pre_cue_time, post_cue_time])
+            plt.legend(loc='upper right', fontsize=12)
+            plt.tight_layout()
+            
+            save_figure(plt.gcf(), "all_subjects", "pooled", f"{state}_periods_photometry")
+            plt.show()
+        
+        # 4. Combined plot comparing all states (middle period only for clarity)
+        plt.figure(figsize=(12, 7))
+        
+        # Define colors for each state
+        state_colors = {
+            'stochastic': 'green',
+            'leftbiased': 'blue',
+            'rightbiased': 'red'
+        }
+        
+        # Plot middle period for each state
+        for state in state_types:
+            period = f"{state}_middle"
+            
+            if cross_subject_averages[period]['avg'] is not None:
+                avg = cross_subject_averages[period]['avg']
+                sem = cross_subject_averages[period]['sem']
+                count = cross_subject_averages[period]['count']
+                
+                plt.fill_between(time_axis,
+                              avg - sem,
+                              avg + sem,
+                              color=state_colors[state], alpha=0.3)
+                
+                plt.plot(time_axis, avg,
+                       color=state_colors[state], linewidth=2,
+                       label=f"{state.capitalize()} (n={count})")
+        
+        # Add vertical line at cue onset
+        plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+        plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        
+        plt.xlabel('Time (s) after first lick', fontsize=16)
+        plt.ylabel('z-ΔF/F', fontsize=16)
+        plt.title('Comparison Across States (Middle Period, All Subjects)', fontsize=20)
+        plt.xlim([-pre_cue_time, post_cue_time])
+        plt.legend(loc='upper right', fontsize=12)
+        plt.tight_layout()
+        
+        save_figure(plt.gcf(), "all_subjects", "pooled", "all_states_middle_comparison")
+        plt.show()
+        
+        return {
+            'subject_id': 'All',
+            'specific_subjects': [result['subject_id'] for result in subject_results],
+            'threshold': threshold,
+            'time_axis': time_axis,
+            'cross_subject_data': cross_subject_data,
+            'cross_subject_averages': cross_subject_averages
+        }
+    
+    else:
+        # Single-subject analysis
+        return analyze_state_period_photometry_single(subject_id, threshold, behavior_df)
+
+
+def analyze_state_period_photometry_single(subject_id, threshold=0.8, behavior_df=None):
+    """
+    Analyze photometry signals for a single subject during different periods of 
+    behavioral states (early, middle, late) and during state transitions (early transition, late transition).
+    
+    States are separated into stochastic, leftbiased, and rightbiased. The function identifies
+    state transitions between any two different states, and analyzes both within-state periods
+    and transition periods.
+    
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    threshold : float, optional (default=0.8)
+        Probability threshold for assigning trials to a state
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from file
+    
+    Returns:
+    --------
+    dict: Analysis results including photometry signals by state period
+    """
+    print(f"Analyzing state periods for {subject_id}...")
+    
+    subject_path = os.path.join(base_dir, subject_id)
+    # Load the parquet file to get state probability data
+    matching_pennies_sessions = set()
+    try:
+        if behavior_df is not None:
+            # If behavior_df is provided, filter it for this subject
+            subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
+        else:
+            # Otherwise load from parquet file
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            subject_data = df[(df['subjid'] == subject_id) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} from parquet file")
+    except Exception as e:
+        print(f"Warning: Could not load session info: {e}")
+
+    # Sort sessions chronologically, filtering to only include MatchingPennies sessions
+    sessions = sorted([d for d in os.listdir(subject_path)
+                      if os.path.isdir(os.path.join(subject_path, d)) and
+                      os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                      d in matching_pennies_sessions])
+    
+    # Define the states
+    state_types = ['stochastic', 'leftbiased', 'rightbiased']
+    
+    # Initialize empty lists to store photometry data for within-state periods
+    within_periods = {}
+    for state in state_types:
+        within_periods[f"{state}_early"] = []
+        within_periods[f"{state}_middle"] = []
+        within_periods[f"{state}_late"] = []
+    
+    # Initialize empty lists for transition periods
+    transition_periods = {}
+    for target_state in state_types:
+        for source_state in state_types:
+            if source_state != target_state:
+                transition_periods[f"to_{target_state}_from_{source_state}_early"] = []
+                transition_periods[f"to_{target_state}_from_{source_state}_late"] = []
+    
+    # Combine all period types
+    period_trials = {**within_periods, **transition_periods}
+    
+    # Store photometry time axis
+    time_axis = None
+    session_count = 0
+    state_run_counts = {state: 0 for state in state_types}
+    state_trial_counts = {state: 0 for state in state_types}
+    transition_counts = {f"{source}_to_{target}": 0 
+                         for source in state_types for target in state_types if source != target}
+    
+    # Parameters for state runs
+    min_state_duration = 15  # Minimum trials for a state to be considered a valid state period
+    
+    # Process each session
+    for session_date in sessions:
+        print(f"Processing {subject_id}/{session_date}...")
+        
+        # Get session data from parquet file
+        session_df = behavior_df[(behavior_df['subjid'] == subject_id) & (behavior_df['date'] == session_date)]
+        
+        if session_df.empty:
+            print(f"No behavioral data found for {subject_id}/{session_date}")
+            continue
+        
+        # Check if required state probability columns exist
+        if not all(col in session_df.columns for col in ['p_stochastic', 'p_leftbias', 'p_rightbias']):
+            print(f"Missing state probability columns for {subject_id}/{session_date}")
+            continue
+        
+        # Get photometry data for the session
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
+        if not session_result or 'epoched_data' not in session_result:
+            print(f"No photometry data found for {subject_id}/{session_date}")
+            continue
+        
+        # Store time axis from the first valid session
+        if time_axis is None:
+            time_axis = session_result['time_axis']
+        
+        session_count += 1
+        
+        # Get state probability data for the session
+        p_stochastic = session_df['p_stochastic'].values
+        p_leftbias = session_df['p_leftbias'].values  
+        p_rightbias = session_df['p_rightbias'].values
+        
+        # Initialize array to track state for each trial
+        trial_states = np.full(len(session_df), 'uncertain', dtype=object)
+        
+        # Determine state for each trial
+        for i in range(len(session_df)):
+            if p_stochastic[i] >= threshold:
+                trial_states[i] = 'stochastic'
+            elif p_leftbias[i] >= threshold:
+                trial_states[i] = 'leftbiased'
+            elif p_rightbias[i] >= threshold:
+                trial_states[i] = 'rightbiased'
+        
+        # Find contiguous state runs
+        state_runs = []
+        current_state = trial_states[0]
+        current_run_start = 0
+        
+        # Loop through trials to find state runs
+        for i in range(1, len(trial_states)):
+            if trial_states[i] != current_state:
+                # End of a run
+                if i - current_run_start >= min_state_duration and current_state != 'uncertain':
+                    state_runs.append({
+                        'state': current_state, 
+                        'start': current_run_start, 
+                        'end': i - 1,
+                        'length': i - current_run_start
+                    })
+                # Start new run
+                current_state = trial_states[i]
+                current_run_start = i
+        
+        # Handle the last run
+        if len(trial_states) - current_run_start >= min_state_duration and current_state != 'uncertain':
+            state_runs.append({
+                'state': current_state, 
+                'start': current_run_start, 
+                'end': len(trial_states) - 1,
+                'length': len(trial_states) - current_run_start
+            })
+        
+        # Find transitions between states
+        transitions = []
+        for i in range(len(state_runs) - 1):
+            current_run = state_runs[i]
+            next_run = state_runs[i+1]
+            
+            if current_run['state'] != next_run['state']:
+                # There's a transition between the end of current run and start of next run
+                transition_start = current_run['end'] + 1
+                transition_end = next_run['start'] - 1
+                
+                if transition_end >= transition_start:  # Only if there are actual transition trials
+                    transitions.append({
+                        'from_state': current_run['state'],
+                        'to_state': next_run['state'],
+                        'start': transition_start,
+                        'end': transition_end,
+                        'length': transition_end - transition_start + 1
+                    })
+        
+        # Get valid trial indices
+        valid_trials = np.array(session_result['valid_trials'])
+        
+        # Process state runs to get within-state photometry data
+        for run in state_runs:
+            state = run['state']
+            run_length = run['length']
+            
+            # Skip uncertain state or short runs
+            if state == 'uncertain' or run_length < min_state_duration:
+                continue
+            
+            # Update state run statistics
+            state_run_counts[state] += 1
+            state_trial_counts[state] += run_length
+            
+            # Divide the run into three equal parts (early, middle, late)
+            part_length = run_length // 3
+            
+            # Define ranges for each part, ensuring to include all trials
+            early_range = range(run['start'], run['start'] + part_length)
+            middle_range = range(run['start'] + part_length, run['end'] - part_length + 1)
+            late_range = range(run['end'] - part_length + 1, run['end'] + 1)
+            
+            # Map to valid trial indices and get photometry data
+            for trial_idx in early_range:
+                if trial_idx < len(session_df):  # Ensure trial index is valid
+                    # Find corresponding index in valid_trials
+                    photo_idx = np.where(valid_trials == trial_idx)[0]
+                    if len(photo_idx) > 0:
+                        period_trials[f"{state}_early"].append(session_result['epoched_data'][photo_idx[0]])
+            
+            for trial_idx in middle_range:
+                if trial_idx < len(session_df):
+                    photo_idx = np.where(valid_trials == trial_idx)[0]
+                    if len(photo_idx) > 0:
+                        period_trials[f"{state}_middle"].append(session_result['epoched_data'][photo_idx[0]])
+            
+            for trial_idx in late_range:
+                if trial_idx < len(session_df):
+                    photo_idx = np.where(valid_trials == trial_idx)[0]
+                    if len(photo_idx) > 0:
+                        period_trials[f"{state}_late"].append(session_result['epoched_data'][photo_idx[0]])
+        
+        # Process transitions
+        for transition in transitions:
+            from_state = transition['from_state']
+            to_state = transition['to_state']
+            transition_length = transition['length']
+            
+            # Skip transitions involving uncertain state
+            if from_state == 'uncertain' or to_state == 'uncertain':
+                continue
+                
+            # Update transition statistics
+            transition_counts[f"{from_state}_to_{to_state}"] += 1
+            
+            # Divide transition into early and late parts
+            midpoint = transition['start'] + transition_length // 2
+            early_trans_range = range(transition['start'], midpoint)
+            late_trans_range = range(midpoint, transition['end'] + 1)
+            
+            # Get photometry data for early transition trials
+            for trial_idx in early_trans_range:
+                if trial_idx < len(session_df):
+                    photo_idx = np.where(valid_trials == trial_idx)[0]
+                    if len(photo_idx) > 0:
+                        period_name = f"to_{to_state}_from_{from_state}_early"
+                        period_trials[period_name].append(session_result['epoched_data'][photo_idx[0]])
+            
+            # Get photometry data for late transition trials
+            for trial_idx in late_trans_range:
+                if trial_idx < len(session_df):
+                    photo_idx = np.where(valid_trials == trial_idx)[0]
+                    if len(photo_idx) > 0:
+                        period_name = f"to_{to_state}_from_{from_state}_late"
+                        period_trials[period_name].append(session_result['epoched_data'][photo_idx[0]])
+    
+    if session_count == 0:
+        print(f"No valid sessions found for {subject_id}")
+        return None
+    
+    # Print statistics
+    print(f"\nProcessed {session_count} sessions for {subject_id}")
+    for state in state_types:
+        print(f"{state.capitalize()} state: {state_run_counts[state]} runs, {state_trial_counts[state]} total trials")
+    
+    print("\nTransition counts:")
+    for trans, count in transition_counts.items():
+        if count > 0:
+            print(f"{trans}: {count} transitions")
+    
+    # Calculate statistics for each period
+    period_data = {}
+    for period, trials in period_trials.items():
+        if len(trials) > 0:
+            # Convert to numpy array first before calculating stats
+            trials_array = np.array(trials)
+            period_data[period] = {
+                'trials': trials_array,
+                'avg': np.mean(trials_array, axis=0),
+                'sem': calculate_sem(trials_array, axis=0),
+                'count': len(trials)
+            }
+        else:
+            period_data[period] = {
+                'trials': np.array([]),
+                'avg': None,
+                'sem': None,
+                'count': 0
+            }
+    
+    # Print trial counts for each period
+    print("\nTrial counts for each period:")
+    for period, data in period_data.items():
+        print(f"{period}: {data['count']} trials")
+    
+    # Create plots
+    
+    # 1. Plot transition periods
+    plt.figure(figsize=(14, 8))
+    
+    # Define colors for transition periods by target state
+    transition_colors = {
+        'stochastic': 'green',
+        'leftbiased': 'blue',
+        'rightbiased': 'red'
+    }
+    
+    # Plot all transitions, grouped by target state
+    for target_state in state_types:
+        for transition_phase in ['early', 'late']:
+            # Combine data from transitions to this target state from all source states
+            target_periods = [p for p in transition_periods.keys() 
+                             if f"to_{target_state}" in p and p.endswith(f"_{transition_phase}")]
+            
+            # Skip if no data
+            valid_periods = [p for p in target_periods if period_data[p]['avg'] is not None]
+            if not valid_periods:
+                continue
+            
+            # Get average across all source states, weighted by trial count
+            total_count = sum(period_data[p]['count'] for p in valid_periods)
+            if total_count == 0:
+                continue
+                
+            weighted_avg = np.zeros_like(period_data[valid_periods[0]]['avg'])
+            for p in valid_periods:
+                if period_data[p]['count'] > 0:
+                    weight = period_data[p]['count'] / total_count
+                    weighted_avg += period_data[p]['avg'] * weight
+            
+            # Line style based on transition phase
+            linestyle = '-' if transition_phase == 'early' else '--'
+            
+            plt.plot(time_axis, weighted_avg,
+                   color=transition_colors[target_state], linestyle=linestyle, linewidth=2,
+                   label=f"To {target_state.capitalize()} ({transition_phase}, n={total_count})")
+    
+    # Add vertical line at cue onset
+    plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+    plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+    
+    plt.xlabel('Time (s) after first lick', fontsize=16)
+    plt.ylabel('ΔF/F', fontsize=16)
+    plt.title(f'Transition Period Photometry Signals: {subject_id}', fontsize=20)
+    plt.xlim([-pre_cue_time, post_cue_time])
+    plt.legend(loc='upper right', fontsize=12)
+    plt.tight_layout()
+    
+    save_figure(plt.gcf(), subject_id, "pooled", "all_transitions_photometry")
+    plt.show()
+    
+    # 2. Plot transitions to each target state
+    for target_state in state_types:
+        # Skip if no transitions to this state
+        target_periods = [p for p in transition_periods.keys() if f"to_{target_state}" in p]
+        if not any(period_data[p]['avg'] is not None for p in target_periods):
+            continue
+            
+        plt.figure(figsize=(12, 7))
+        
+        # Plot transitions to this target state from each source state
+        for source_state in [s for s in state_types if s != target_state]:
+            for phase in ['early', 'late']:
+                period = f"to_{target_state}_from_{source_state}_{phase}"
+                
+                if period_data[period]['avg'] is not None and period_data[period]['count'] > 0:
+                    # Determine color based on source state
+                    color = transition_colors[source_state]
+                    
+                    # Line style based on transition phase
+                    linestyle = '-' if phase == 'early' else '--'
+                    
+                    plt.plot(time_axis, period_data[period]['avg'],
+                           color=color, linestyle=linestyle, linewidth=2,
+                           label=f"From {source_state.capitalize()} ({phase}, n={period_data[period]['count']})")
+        
+        # Add vertical line at cue onset
+        plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+        plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        
+        plt.xlabel('Time (s) after first lick', fontsize=16)
+        plt.ylabel('ΔF/F', fontsize=16)
+        plt.title(f'Transitions to {target_state.capitalize()} State: {subject_id}', fontsize=20)
+        plt.xlim([-pre_cue_time, post_cue_time])
+        plt.legend(loc='upper right', fontsize=12)
+        plt.tight_layout()
+        
+        save_figure(plt.gcf(), subject_id, "pooled", f"transitions_to_{target_state}")
+        plt.show()
+    
+    # 3. Plot within-state periods
+    for state in state_types:
+        # Skip if no data for this state
+        state_periods = [p for p in within_periods.keys() if p.startswith(f"{state}_")]
+        if not any(period_data[p]['avg'] is not None for p in state_periods):
+            continue
+            
+        plt.figure(figsize=(12, 7))
+        
+        # Define colors for within-state periods
+        phase_colors = {
+            'early': 'lightblue',
+            'middle': 'blue',
+            'late': 'darkblue'
+        }
+        
+        # Plot each phase within this state
+        for phase in ['early', 'middle', 'late']:
+            period = f"{state}_{phase}"
+            
+            if period_data[period]['avg'] is not None and period_data[period]['count'] > 0:
+                plt.plot(time_axis, period_data[period]['avg'],
+                       color=phase_colors[phase], linewidth=2,
+                       label=f"{phase.capitalize()} (n={period_data[period]['count']})")
+        
+        # Add vertical line at cue onset
+        plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+        plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        
+        plt.xlabel('Time (s) after first lick', fontsize=16)
+        plt.ylabel('ΔF/F', fontsize=16)
+        plt.title(f'{state.capitalize()} State Periods: {subject_id}', fontsize=20)
+        plt.xlim([-pre_cue_time, post_cue_time])
+        plt.legend(loc='upper right', fontsize=12)
+        plt.tight_layout()
+        
+        save_figure(plt.gcf(), subject_id, "pooled", f"{state}_periods_photometry")
+        plt.show()
+    
+    # 4. Compare all states (middle period)
+    plt.figure(figsize=(12, 7))
+    
+    # Define colors for each state
+    state_colors = {
+        'stochastic': 'green',
+        'leftbiased': 'blue',
+        'rightbiased': 'red'
+    }
+    
+    # Plot middle period for each state
+    valid_states = 0
+    for state in state_types:
+        period = f"{state}_middle"
+        
+        if period_data[period]['avg'] is not None and period_data[period]['count'] > 0:
+            valid_states += 1
+            plt.plot(time_axis, period_data[period]['avg'],
+                   color=state_colors[state], linewidth=2,
+                   label=f"{state.capitalize()} (n={period_data[period]['count']})")
+    
+    # Only show plot if at least two states have data
+    if valid_states >= 1:
+        # Add vertical line at cue onset
+        plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5, label='Lick Timing')
+        plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+        
+        plt.xlabel('Time (s) after first lick', fontsize=16)
+        plt.ylabel('ΔF/F', fontsize=16)
+        plt.title(f'Comparison Across States (Middle Period): {subject_id}', fontsize=20)
+        plt.xlim([-pre_cue_time, post_cue_time])
+        plt.legend(loc='upper right', fontsize=12)
+        plt.tight_layout()
+        
+        save_figure(plt.gcf(), subject_id, "pooled", "all_states_middle_comparison")
+        plt.show()
+    
+    # Return analysis results
+    return {
+        'subject_id': subject_id,
+        'threshold': threshold,
+        'time_axis': time_axis,
+        'session_count': session_count,
+        'state_run_counts': state_run_counts,
+        'state_trial_counts': state_trial_counts,
+        'transition_counts': transition_counts,
+        'period_data': period_data
+    }

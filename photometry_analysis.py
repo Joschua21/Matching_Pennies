@@ -22,7 +22,7 @@ post_cue_samples = int(post_cue_time * sampling_rate)
 total_window_samples = pre_cue_samples + post_cue_samples
 
 PARQUET_PATH = "/Volumes/ogma/delab/matchingpennies/matchingpennies_datatable.parquet"
-CODE_VERSION = "1.0.9"  # Increment this when making analysis changes --> will force recomputation of all data
+CODE_VERSION = "1.1.1"  # Increment this when making analysis changes --> will force recomputation of all data
 _SESSION_CACHE = {}
 
 
@@ -205,19 +205,33 @@ def save_figure(fig, subject_id, session_date, fig_name="figure"):
         print(f"Error saving figure: {e}")
 
 
-def process_session(subject_id, session_date, force_recompute=False, use_global_cache=True, behavior_df=None):
+def process_session(subject_id, session_date, force_recompute=False, use_global_cache=True, behavior_df=None, z_score=True):
     """Process a single session for a given subject"""
 
 
-    cache_key = f"{subject_id}/{session_date}"
+    cache_key = f"{subject_id}/{session_date}" + ("" if z_score else "/raw")
     if use_global_cache and cache_key in _SESSION_CACHE and not force_recompute:
         return _SESSION_CACHE[cache_key]
     
     # Then check saved results
     if not force_recompute:
-        saved_result = check_saved_results(subject_id, session_date)  
-        if saved_result is not None:
-            return saved_result
+        session_dir = get_output_path(subject_id, session_date)
+        results_file = os.path.join(session_dir, "analysis_results" + ("" if z_score else "_raw") + ".pkl")
+        
+        if os.path.exists(results_file):
+            try:
+                with open(results_file, "rb") as f:
+                    result = pickle.load(f)
+                # Check if saved result has version info and matches current version
+                if 'code_version' not in result or result['code_version'] != CODE_VERSION:
+                    print(f"Saved results for {subject_id}/{session_date} are from different code version. Recomputing...")
+                else:
+                    print(f"Loaded saved {'z-scored' if z_score else 'raw'} results for {subject_id}/{session_date}")
+                    if use_global_cache:
+                        _SESSION_CACHE[cache_key] = result
+                    return result
+            except Exception as e:
+                print(f"Error loading saved results: {e}")
 
     full_dir = os.path.join(base_dir, subject_id, session_date)
     deltaff_file = os.path.join(full_dir, "deltaff.npy")
@@ -230,6 +244,15 @@ def process_session(subject_id, session_date, force_recompute=False, use_global_
     try:
         deltaff_data = np.load(deltaff_file)
         print(f"{subject_id}/{session_date}: Loaded deltaff data with shape: {deltaff_data.shape}")
+        
+        # Only apply z-scoring if requested
+        if z_score:
+            deltaff_mean = np.mean(deltaff_data)
+            detlaff_std = np.std(deltaff_data)
+            deltaff_data = (deltaff_data - deltaff_mean) / detlaff_std
+            print(f"{subject_id}/{session_date}: Applied z-score normalization")
+        else:
+            print(f"{subject_id}/{session_date}: Using raw (non-z-scored) data")
 
         with open(pkl_file, "rb") as f:
             pkl_data = pickle.load(f)
@@ -306,18 +329,30 @@ def process_session(subject_id, session_date, force_recompute=False, use_global_
             'behavioral_data': behavior_data,
             'reward_outcomes': reward_outcomes,
             'choices': choices,
-            'plotting_data': plotting_data
+            'plotting_data': plotting_data,
+            'z_scored': z_score  # Store whether this data was z-scored
         }
 
-        save_results(result, subject_id, session_date)
+        # Save results with appropriate filename suffix based on z_score parameter
+        session_dir = get_output_path(subject_id, session_date)
+        results_file = os.path.join(session_dir, f"analysis_results{'_raw' if not z_score else ''}.pkl")
+        
+        try:
+            with open(results_file, "wb") as f:
+                pickle.dump(result, f)
+            print(f"Saved {'raw' if not z_score else ''} results for {subject_id}/{session_date} to {results_file}")
+        except Exception as e:
+            print(f"Error saving results: {e}")
+            
+        # Store in memory cache
         if use_global_cache:
             _SESSION_CACHE[cache_key] = result
+            
         return result
 
     except Exception as e:
         print(f"Error processing session {subject_id}/{session_date}: {e}")
         return None
-
 
 def plot_session_results(analysis_result, show_heatmap=False, win_loss=False, save_fig=True):
     """Plot the results for a single session with an optional heatmap of individual trials."""
@@ -516,9 +551,11 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
                 plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
                 
                 # Labels and formatting
-                plt.xlabel('Time (s)', fontsize=16)
-                plt.ylabel('ΔF/F', fontsize=16)
-                plt.title(f'Pooled Photometry Response: {subject_id} ({len(saved_results["session_dates"])} sessions)', fontsize=14)
+                plt.xlabel('Time (s) after first lick', fontsize=24)
+                plt.ylabel('z-ΔF/F', fontsize=24)
+                plt.xticks(fontsize=20)
+                plt.yticks(fontsize=20)
+                plt.title(f'Pooled Photometry Response: {subject_id} ({len(saved_results["session_dates"])} sessions)', fontsize=26)
                 plt.xlim([-pre_cue_time, post_cue_time])
                 
                 # Fix the legend - limit session traces if too many
@@ -544,15 +581,6 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
                 # Add grid explicitly before other elements
                 plt.grid(True, alpha=0.3)  # Make sure this comes before tight_layout
 
-                # Add statistics - count only non-'M' trials
-                total_trials = saved_results['total_trials']
-                stats_text = (f"Total Sessions: {len(saved_results['session_dates'])}\n"
-                            f"Total Trials: {total_trials} (excluding 'M' choices)\n"
-                            f"Peak: {np.max(saved_results['pooled_average']):.4f}\n"
-                            f"Baseline: {np.mean(saved_results['pooled_average'][:pre_cue_samples]):.4f}")
-                plt.text(-pre_cue_time + 0.2, saved_results['pooled_average'].max() * 1.2, stats_text,
-                    bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
-                
                 plt.tight_layout()
                 # Save the figure with appropriate suffix
                 trace_suffix = "_with_sessions" if show_session_traces else ""
@@ -704,9 +732,11 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
         plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
 
         # Labels and formatting
-        plt.xlabel('Time (s)', fontsize=16)
-        plt.ylabel('ΔF/F', fontsize=16)
-        plt.title(f'Pooled Photometry Response: {subject_id} ({len(all_sessions)} sessions)', fontsize=20)
+        plt.xlabel('Time (s) after first lick', fontsize=24)
+        plt.ylabel('z-ΔF/F', fontsize=24)
+        plt.xticks(fontsize=20)
+        plt.yticks(fontsize=20)
+        plt.title(f'Pooled Photometry Response: {subject_id} ({len(all_sessions)} sessions)', fontsize=26)
         plt.xlim([-pre_cue_time, post_cue_time])
 
         # Limit legend items if too many sessions
@@ -714,20 +744,11 @@ def analyze_pooled_data(subject_id, win_loss=False, force_recompute=False, fig=N
             handles, labels = plt.gca().get_legend_handles_labels()
             limited_handles = handles[:8]
             limited_labels = labels[:8]
-            plt.legend(limited_handles, limited_labels, loc='upper right', fontsize=16)
+            plt.legend(limited_handles, limited_labels, loc='upper right', fontsize=24)
         else:
-            plt.legend(loc='upper right', fontsize=16)
+            plt.legend(loc='upper right', fontsize=24)
 
         plt.tight_layout()
-
-        # Add statistics - count only non-'M' trials
-        total_trials = sum(len(session['non_m_trials']) for session in all_sessions)
-        stats_text = (f"Total Sessions: {len(all_sessions)}\n"
-                      f"Total Trials: {total_trials} (excluding 'M' choices)\n"
-                      f"Peak: {np.max(pooled_average):.4f}\n"
-                      f"Baseline: {np.mean(pooled_average[:pre_cue_samples]):.4f}")
-        plt.text(-pre_cue_time + 0.2, pooled_average.max() * 1.2, stats_text,
-                 bbox=dict(facecolor='white', alpha=0.7))
 
         # Save the figure
         trace_suffix = "_with_sessions" if show_session_traces else ""
@@ -936,7 +957,7 @@ def pooled_results(subject_id="All", win_loss=False, force_recompute=False, show
                                rewarded_mean + rewarded_sem,  
                                color='lightgreen', alpha=0.4, 
                                label=f'_Rewarded ± SEM (n={len(rewarded_averages)} subjects)')  
-                plt.plot(time_axis, rewarded_mean, color='green', linewidth=2.5, label=f'Rewarded Avg (n={len(rewarded_averages)} subjects)')
+                plt.plot(time_axis, rewarded_mean, color='green', linewidth=2.5, label=f'Rew Avg')
             
             if unrewarded_averages:
                 # Calculate mean and SEM across subjects for unrewarded trials
@@ -948,7 +969,7 @@ def pooled_results(subject_id="All", win_loss=False, force_recompute=False, show
                                unrewarded_mean + unrewarded_sem,  
                                color='lightsalmon', alpha=0.4, 
                                label=f'_Unrewarded ± SEM (n={len(unrewarded_averages)} subjects)')  
-                plt.plot(time_axis, unrewarded_mean, color='darkorange', linewidth=2.5, label=f'Unrewarded Avg (n={len(unrewarded_averages)} subjects)')
+                plt.plot(time_axis, unrewarded_mean, color='darkorange', linewidth=2.5, label=f'Unrew Avg')
         else:
             # Get all average data
             all_averages = [item["data"] for item in all_subject_averages if item["type"] == "average"]
@@ -969,11 +990,13 @@ def pooled_results(subject_id="All", win_loss=False, force_recompute=False, show
         plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
         
         # Labels and formatting
-        plt.xlabel('Time (s)', fontsize=16)
-        plt.ylabel('ΔF/F', fontsize=16)
-        plt.title(f'Pooled Photometry Response: All Subjects (n={len(specific_subjects)})', fontsize=20)
+        plt.xlabel('Time (s) after first lick', fontsize=24)
+        plt.ylabel('z-ΔF/F', fontsize=24)
+        plt.xticks(fontsize=24)
+        plt.yticks(fontsize=24)
+        plt.title(f'Pooled Photometry Response: All Subjects (n={len(specific_subjects)})', fontsize=26)
         plt.xlim([-pre_cue_time, post_cue_time])
-        plt.legend(loc='upper right', fontsize=16)
+        plt.legend(loc='upper right', fontsize=24)
         plt.tight_layout()
         
         # Save the figure
@@ -1132,16 +1155,18 @@ def analyze_group_reward_rates(behavior_df=None, min_trials=100, save_fig=True, 
                          np.array(mean_values) - np.array(sem_values),
                          np.array(mean_values) + np.array(sem_values),
                          color='black', alpha=0.2)
-        plt.plot(x_values, mean_values, 'o-', 
+        plt.plot(x_values, mean_values, 
                  color='black', linewidth=2.5, label=f'Group average (n={len(subjects)})')
 
     # Add a reference line at 0.5
     plt.axhline(y=0.5, color='red', linestyle='--', linewidth=1.5)
 
     # Set axis labels and title
-    plt.xlabel('Session Number', fontsize=14)
-    plt.ylabel('Average Reward Rate', fontsize=14)
-    plt.title('Reward Rate Progression Across Sessions by Subject', fontsize=16)
+    plt.xlabel('Session Number', fontsize=26)
+    plt.ylabel('Average Reward Rate', fontsize=26)
+    plt.xticks(fontsize=22)
+    plt.yticks(fontsize=22)
+    plt.title('Reward Rate Across Learning', fontsize=26)
 
     # Set axis limits
     plt.xlim(0.5, results['max_sessions'] + 0.5)
@@ -1149,7 +1174,7 @@ def analyze_group_reward_rates(behavior_df=None, min_trials=100, save_fig=True, 
     plt.grid(True, alpha=0.3)
     
     # Add legend for group average
-    plt.legend(loc='upper right')
+    plt.legend(loc='upper right', fontsize=24)
 
     plt.tight_layout()
 
@@ -1334,25 +1359,26 @@ def analyze_group_computer_confidence(behavior_df=None, min_trials=100, save_fig
                          np.array(mean_values) - np.array(sem_values),
                          np.array(mean_values) + np.array(sem_values),
                          color='black', alpha=0.2)
-        plt.plot(x_values, mean_values, 'o-', 
+        plt.plot(x_values, mean_values,
                  color='black', linewidth=2.5, label=f'Group average (n={len(subjects)})')
 
     # Add a reference line at p=0.05 (-log10(0.05) ≈ 1.3)
     p_05_line = -np.log10(0.05)
-    plt.axhline(y=p_05_line, color='red', linestyle='--', linewidth=1.5,
-                label='p = 0.05')
+    plt.axhline(y=p_05_line, color='red', linestyle='--', linewidth=1.5)
 
     # Set axis labels and title
-    plt.xlabel('Session Number', fontsize=14)
-    plt.ylabel('Computer Confidence (-log10(p))', fontsize=14)
-    plt.title('Computer Confidence Progression Across Sessions by Subject', fontsize=16)
+    plt.xlabel('Session Number', fontsize=24)
+    plt.ylabel('Computer "Confidence" (-log10(min_p))', fontsize=24)
+    plt.xticks(fontsize=22)
+    plt.yticks(fontsize=22)
+    plt.title('Average Computer Confidence Across Learning', fontsize=26)
 
     # Set axis limits
     plt.xlim(0.5, results['max_sessions'] + 0.5)
     plt.grid(True, alpha=0.3)
 
     # Add legend
-    plt.legend(loc='upper right')
+    plt.legend(loc='upper right', fontsize=24)
 
     plt.tight_layout()
 
@@ -1378,6 +1404,117 @@ def analyze_group_computer_confidence(behavior_df=None, min_trials=100, save_fig
     }
     
     return results
+
+def plot_single_session_metrics(subject_id, session_date, metric_type="reward_rate", behavior_df=None, window_size=20):
+    """
+    Plot reward rate or computer confidence metrics for a single session in publication-ready format.
+    
+    Parameters:
+    -----------
+    subject_id : str
+        The subject ID to analyze
+    session_date : str
+        The specific session date to plot (format: 'YYYYMMDD')
+    metric_type : str
+        Either "reward_rate" or "computer_confidence"
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use
+    """
+    if behavior_df is None:
+        behavior_df = load_filtered_behavior_data("MatchingPennies")
+    
+    # Filter data for the specific subject and session
+    session_data = behavior_df[(behavior_df['subjid'] == subject_id) & 
+                              (behavior_df['date'] == session_date)]
+    
+    if session_data.empty:
+        print(f"No data found for {subject_id} on {session_date}")
+        return
+    
+    # Calculate the selected metric
+    window_size = window_size
+    metric_values = []
+    
+    if metric_type == "reward_rate":
+        # Calculate reward rates with moving average
+        rewards = session_data['reward'].values
+        overall_rate = np.mean(rewards)
+        
+        for i in range(len(rewards)):
+            if i < window_size:
+                available_data = rewards[:i + 1]
+                missing_data_weight = (window_size - len(available_data)) / window_size
+                rate = (np.sum(available_data) + missing_data_weight * window_size * overall_rate) / window_size
+            else:
+                rate = np.mean(rewards[i - window_size + 1:i + 1])
+            metric_values.append(rate)
+        
+        y_label = "Reward Rate"
+        threshold = 0.5
+        threshold_label = None
+        threshold_style = {'color': 'black', 'linestyle': '--', 'linewidth': 1.5, 'alpha': 0.7}
+        
+    else:  # computer_confidence
+        # Calculate computer confidence (-log10(p))
+        p_values = session_data['min_pvalue'].values
+        p_values = np.nan_to_num(p_values, nan=1.0)
+        p_values = np.maximum(p_values, 1e-12)  # Apply minimum p-value threshold
+        confidence = -np.log10(p_values)
+        overall_confidence = np.mean(confidence)
+        
+        for i in range(len(confidence)):
+            if i < window_size:
+                available_data = confidence[:i + 1]
+                missing_data_weight = (window_size - len(available_data)) / window_size
+                conf = (np.sum(available_data) + missing_data_weight * window_size * overall_confidence) / window_size
+            else:
+                conf = np.mean(confidence[i - window_size + 1:i + 1])
+            metric_values.append(conf)
+        
+        y_label = "Computer 'Confidence'\n(-log10(min_p))"
+        threshold = -np.log10(0.05)  # p = 0.05
+        threshold_style = {'color': 'red', 'linestyle': '-', 'linewidth': 1.5, 'alpha': 0.7}
+
+    # Create figure with publication-quality styling
+    plt.figure(figsize=(12, 4))
+    
+    # Plot the data with a clean black line
+    trials = range(1, len(metric_values) + 1)
+    plt.plot(trials, metric_values, color='black', linewidth=2)
+    
+    # Add threshold line with appropriate styling
+    plt.axhline(y=threshold, **threshold_style)
+    
+    # Set clean, professional axis labels and title
+    plt.xlabel('Trial Number', fontsize=24)
+    plt.ylabel(y_label, fontsize=21)
+    plt.xticks(fontsize=20)
+    plt.yticks(fontsize=20)
+    #plt.title(f'{subject_id}: Session {session_date}', fontsize=26, fontweight='bold')
+    
+    # Configure grid and spines for publication style
+    for spine in plt.gca().spines.values():
+        spine.set_linewidth(1.5)
+    
+    # Set reasonable y-axis limits
+    if metric_type == "reward_rate":
+        plt.ylim([0, 1])
+    else:
+        y_max = max(12, max(metric_values) * 1.1)  # Cap at reasonable maximum
+        plt.ylim([0, y_max])
+    
+    # Add legend if threshold has a label
+    if threshold_label:
+        plt.legend(frameon=True, fontsize=12)
+    
+    plt.tight_layout()
+    
+    # Save figure with high resolution
+    fig_name = f"{subject_id}_{session_date}_{metric_type}"
+    plt.savefig(f"{fig_name}.png", dpi=300, bbox_inches='tight')
+    plt.savefig(f"{fig_name}.pdf", format='pdf', bbox_inches='tight')
+    
+    plt.show()
 
 def analyze_reward_rate_quartiles(subject_id, session_date=None, win_loss=False, behavior_df=None, specific_subjects=None):
     """
@@ -2952,7 +3089,7 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_
     # Process each session
     for idx, session_date in enumerate(sessions):
         # Process the session
-        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df, z_score=False)
         if not session_result:
             print(f"Could not process session {subject_id}/{session_date}")
             continue
@@ -3057,15 +3194,30 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_
 
     # Create colors for plotting
     num_sessions = len(sorted_sessions)
-    if comp_conf and session_confidences:
-        # When sorting by confidence, use reversed color gradient (highest confidence = lightest blue)
-        blue_colors = plt.cm.Blues(np.linspace(0.3, 1, num_sessions))
+    
+    # Special coloring for JOA-M-0020: Yellow -> Green -> Blue gradient (viridis-like)
+    if subject_id == "JOA-M-0020":
+        if comp_conf and session_confidences:
+            # When sorting by confidence, use viridis colormap (yellow -> green -> blue -> purple)
+            colors = plt.cm.viridis(np.linspace(0, 1, num_sessions))
+        else:
+            # For chronological sorting, also use viridis for JOA-M-0020
+            colors = plt.cm.viridis(np.linspace(0, 1, num_sessions))
     else:
-        # Default: earliest session = lightest blue
-        blue_colors = plt.cm.Blues(np.linspace(0.3, 1, num_sessions))
+        # Regular Blues colormap for other subjects
+        if comp_conf and session_confidences:
+            # When sorting by confidence, use reversed color gradient (highest confidence = lightest blue)
+            colors = plt.cm.Blues(np.linspace(0.3, 1, num_sessions))
+        else:
+            # Default: earliest session = lightest blue
+            colors = plt.cm.Blues(np.linspace(0.3, 1, num_sessions))
 
     # Create plot
     plt.figure(figsize=(12, 7))
+    chronological_sessions = sorted(session_differences.keys())
+
+    # Create mapping from session date to chronological position (1-indexed)
+    chronological_order = {sess_date: idx+1 for idx, sess_date in enumerate(chronological_sessions)}
 
     # Plot each session's win-loss difference
     for idx, sess_date in enumerate(sorted_sessions):
@@ -3075,30 +3227,31 @@ def analyze_session_win_loss_difference_gap(subject_id, session_date=None, comp_
         
         # Create label with confidence value if available
         if comp_conf and sess_date in session_confidences:
-            label = f'Session {sess_date} (conf: {session_confidences[sess_date]:.2f})'
+            label = f'Session {chronological_order[sess_date]} (conf: {session_confidences[sess_date]:.2f})'
         else:
-            label = f'Session {sess_date}'
+            label = f'Session {chronological_order[sess_date]}'
         
         # Plot with shaded error region
         if sem:
             plt.fill_between(time_axis,
                             win_loss_diff - win_loss_sem,
                             win_loss_diff + win_loss_sem,
-                            color=blue_colors[idx], alpha=0.2)
+                            color=colors[idx], alpha=0.2)
         plt.plot(time_axis, win_loss_diff,
-                 color=blue_colors[idx],
-                 label=label, linewidth=2)
+                color=colors[idx],
+             label=label, linewidth=2)
 
     # Add reference lines
-    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5)
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
 
     # Labels and formatting
-    plt.xlabel('Time (s)', fontsize=16)
-    plt.ylabel('Rewarded - Unrewarded ΔF/F', fontsize=16)
+    plt.xlabel('Time (s) after first lick', fontsize=24)
+    plt.ylabel('Rewarded - Unrewarded ΔF/F', fontsize=24)
+    plt.tick_params(axis='both', which='major', labelsize=20)
     
-    sort_type = "Computer Confidence" if comp_conf else "Chronological"
-    plt.title(f'Win-Loss Difference: {subject_id} (sorted by {sort_type})', fontsize=14)
+    sort_type = "by computer confidence" if comp_conf else "chronologically"
+    plt.title(f'Win-Loss Difference: {subject_id} (sorted {sort_type})', fontsize=26)
     
     plt.xlim([-pre_cue_time, post_cue_time])
     plt.legend(loc='upper right')
@@ -3182,10 +3335,10 @@ def analyze_previous_outcome_effect(subject_id="All", time_split=False, behavior
         
         # Define colors and labels
         colors = {
-            'prev_win_curr_win': 'darkgreen',
-            'prev_win_curr_loss': 'firebrick',
-            'prev_loss_curr_win': 'mediumseagreen',
-            'prev_loss_curr_loss': 'indianred'
+            'prev_win_curr_win': '#117733',  # green
+            'prev_win_curr_loss': '#DDCC77', # yellow
+            'prev_loss_curr_win': '#4477AA', # blue
+            'prev_loss_curr_loss': '#CC6677' # red
         }
         
         # Calculate and plot the cross-subject average for each condition
@@ -3195,7 +3348,12 @@ def analyze_previous_outcome_effect(subject_id="All", time_split=False, behavior
                 condition_mean = np.mean(subject_condition_avgs[condition], axis=0)
                 condition_sem = np.std(subject_condition_avgs[condition], axis=0) / np.sqrt(len(subject_condition_avgs[condition]))
                 
-                label_name = condition.replace('prev_', '').replace('curr_', '-').replace('_', ' ').title()
+                labels = {
+                    "prev_win_curr_win": "Win → Win", 
+                    "prev_win_curr_loss": "Win → Loss",
+                    "prev_loss_curr_win": "Loss → Win",
+                    "prev_loss_curr_loss": "Loss → Loss"
+                    }
                 
                 plt.fill_between(time_axis,
                                condition_mean - condition_sem,
@@ -3203,19 +3361,20 @@ def analyze_previous_outcome_effect(subject_id="All", time_split=False, behavior
                                color=color, alpha=0.3)
                 plt.plot(time_axis, condition_mean,
                        color=color, linewidth=2, 
-                       label=f'{label_name} (n={len(subject_condition_avgs[condition])} subjects)')
+                       label=f'{labels[condition]}')
         
         # Add vertical line at cue onset
-        plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+        plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5)
         plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
         
         # Labels and formatting
-        plt.xlabel('Time (s)', fontsize=16)
-        plt.ylabel('ΔF/F', fontsize=16)
+        plt.xlabel('Time (s) after first lick', fontsize=24)
+        plt.ylabel('z-ΔF/F', fontsize=24)
+        plt.tick_params(axis='both', which='major', labelsize=20)
         plt.title(f'LC Signal by Previous Trial Outcome: All Subjects (n={len(specific_subjects)})', 
-                 fontsize=20)
+                 fontsize=26)
         plt.xlim([-pre_cue_time, post_cue_time])
-        plt.legend(loc='upper right', fontsize=16)
+        plt.legend(loc='upper right', fontsize=24)
         plt.tight_layout()
         
         # Save the figure
@@ -3521,10 +3680,10 @@ def analyze_previous_outcome_effect_single(subject_id, time_split=False, behavio
 
     # Define colors and labels
     colors = {
-        'prev_win_curr_win': 'darkgreen',
-        'prev_win_curr_loss': 'firebrick',
-        'prev_loss_curr_win': 'mediumseagreen',
-        'prev_loss_curr_loss': 'indianred'
+        'prev_win_curr_win': '#117733',  # green
+        'prev_win_curr_loss': '#DDCC77', # yellow
+        'prev_loss_curr_win': '#4477AA', # blue
+        'prev_loss_curr_loss': '#CC6677' # red
     }
 
     labels = {
@@ -3545,15 +3704,16 @@ def analyze_previous_outcome_effect_single(subject_id, time_split=False, behavio
                      color=color, linewidth=2, label=labels[condition])
 
     # Add vertical line at cue onset
-    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5, label='Lick Timing')
+    plt.axvline(x=0, color='red', linestyle='--', linewidth=1.5)
     plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
 
     # Labels and formatting
-    plt.xlabel('Time (s)', fontsize=16)
-    plt.ylabel('ΔF/F', fontsize=16)
-    plt.title(f'LC Signal by Previous Trial Outcome: {subject_id} ({len(all_sessions)} sessions)', fontsize=20)
+    plt.xlabel('Time (s) after first lick', fontsize=24)
+    plt.ylabel('z-ΔF/F', fontsize=24)
+    plt.tick_params(axis='both', which='major', labelsize=20)
+    plt.title(f'LC Signal by Previous Trial Outcome: {subject_id}', fontsize=26)
     plt.xlim([-pre_cue_time, post_cue_time])
-    plt.legend(loc='upper right', fontsize=16)
+    plt.legend(loc='upper right', fontsize=24)
     plt.tight_layout()
 
     # Save the figure
@@ -3565,10 +3725,10 @@ def analyze_previous_outcome_effect_single(subject_id, time_split=False, behavio
         # Define style parameters for time-split plots
         period_colors = {'early': 'lightskyblue', 'middle': 'royalblue', 'late': 'darkblue'}
         condition_styles = {
-            'prev_win_curr_win': {'color': 'darkgreen', 'linestyle': '-', 'marker': 'o'},
-            'prev_win_curr_loss': {'color': 'firebrick', 'linestyle': '-', 'marker': 's'},
-            'prev_loss_curr_win': {'color': 'mediumseagreen', 'linestyle': '-', 'marker': '^'},
-            'prev_loss_curr_loss': {'color': 'indianred', 'linestyle': '-', 'marker': 'D'}
+            'prev_win_curr_win': {'color': '#117733', 'linestyle': '-', 'marker': 'o'},
+            'prev_win_curr_loss': {'color': '#DDCC77', 'linestyle': '-', 'marker': 's'},
+            'prev_loss_curr_win': {'color': '#4477AA', 'linestyle': '-', 'marker': '^'},
+            'prev_loss_curr_loss': {'color': '#CC6677', 'linestyle': '-', 'marker': 'D'}
         }
 
         # 1. Create plots for each time period (early, middle, late) - all conditions
@@ -3661,6 +3821,212 @@ def analyze_previous_outcome_effect_single(subject_id, time_split=False, behavio
         'session_dates': session_dates
     }
     return result
+
+
+def analyze_selected_previous_outcome(subject_id, selected_conditions=None, behavior_df=None):
+    """
+    Analyze photometry signals for selected previous and current outcome combinations.
+    
+    Parameters:
+    -----------
+    subject_id : str
+        The identifier for the subject
+    selected_conditions : list or str, optional
+        Specific outcome combinations to show. Can be a single string or list of strings.
+        Options: "win_win", "win_loss", "loss_win", "loss_loss", or "all"
+        If None or "all", all four combinations will be shown
+    behavior_df : pandas.DataFrame, optional
+        Pre-loaded behavior dataframe to use instead of loading from parquet
+        
+    Returns:
+    --------
+    dict: Analysis results for the selected outcome combinations
+    """
+    # Validate and standardize selected_conditions
+    valid_conditions = ["win_win", "win_loss", "loss_win", "loss_loss"]
+    
+    if selected_conditions is None or selected_conditions == "all":
+        selected_conditions = valid_conditions
+    elif isinstance(selected_conditions, str):
+        if selected_conditions in valid_conditions:
+            selected_conditions = [selected_conditions]
+        else:
+            print(f"Invalid condition '{selected_conditions}'. Using all conditions.")
+            selected_conditions = valid_conditions
+    else:
+        # Filter out any invalid conditions
+        selected_conditions = [cond for cond in selected_conditions if cond in valid_conditions]
+        if not selected_conditions:
+            print("No valid conditions provided. Using all conditions.")
+            selected_conditions = valid_conditions
+            
+    print(f"Analyzing {len(selected_conditions)} outcome combinations: {', '.join(selected_conditions)}")
+    
+    # Find all session directories for this subject
+    subject_path = os.path.join(base_dir, subject_id)
+    matching_pennies_sessions = set()
+    
+    try:
+        if behavior_df is not None:
+            # If behavior_df is provided, filter it for this subject
+            subject_data = behavior_df[behavior_df['subjid'] == subject_id]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} in provided dataframe")
+        else:
+            # Otherwise load from parquet file
+            df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+            df['date'] = df['date'].astype(str)
+            subject_data = df[(df['subjid'] == subject_id) & (df['protocol'].str.contains('MatchingPennies', na=False))]
+            matching_pennies_sessions = set(subject_data['date'].unique())
+            print(f"Found {len(matching_pennies_sessions)} MatchingPennies sessions for {subject_id} from parquet file")
+    except Exception as e:
+        print(f"Warning: Could not load session info: {e}")
+
+    # Sort sessions chronologically
+    sessions = sorted([d for d in os.listdir(subject_path)
+                      if os.path.isdir(os.path.join(subject_path, d)) and
+                      os.path.exists(os.path.join(subject_path, d, "deltaff.npy")) and
+                      d in matching_pennies_sessions])
+    
+    # Collect data by previous and current outcome
+    outcome_data = {
+        "win_win": [], 
+        "win_loss": [],
+        "loss_win": [],
+        "loss_loss": []
+    }
+    
+    time_axis = None
+    total_sessions = 0
+    
+    # Process each session
+    for session_date in sessions:
+        print(f"Processing {subject_id}/{session_date}...")
+        
+        # Process the session
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
+        if not session_result:
+            print(f"Could not process session {subject_id}/{session_date}")
+            continue
+        
+        if len(session_result['non_m_trials']) < 100:
+            print(f"Skipping {subject_id}/{session_date}, less than 100 valid trials ({len(session_result['non_m_trials'])}).")
+            continue
+            
+        total_sessions += 1
+        
+        # Get time axis from the first valid session
+        if time_axis is None:
+            time_axis = session_result['time_axis']
+        
+        # Get rewards
+        rewards = np.array(session_result['behavioral_data']['reward'])
+        
+        # Map from non_m_trials (indices in plotting_data) back to original trial indices
+        valid_trials = np.array(session_result["valid_trials"])
+        non_m_trials = np.array(session_result["non_m_trials"])
+        
+        # Process each non-missed trial except the first one
+        for i in range(1, len(non_m_trials)):
+            # Get the actual trial indices
+            curr_trial_idx = non_m_trials[i]
+            prev_trial_idx = non_m_trials[i-1]
+            
+            # Skip if these trials are not consecutive
+            if prev_trial_idx + 1 != curr_trial_idx:
+                continue
+                
+            # Get outcomes
+            prev_outcome = rewards[prev_trial_idx]
+            curr_outcome = rewards[curr_trial_idx]
+                
+            # Previous win, current win
+            if prev_outcome == 1 and curr_outcome == 1:
+                outcome_data["win_win"].append(session_result['plotting_data'][i])
+            
+            # Previous win, current loss
+            elif prev_outcome == 1 and curr_outcome == 0:
+                outcome_data["win_loss"].append(session_result['plotting_data'][i])
+            
+            # Previous loss, current win
+            elif prev_outcome == 0 and curr_outcome == 1:
+                outcome_data["loss_win"].append(session_result['plotting_data'][i])
+            
+            # Previous loss, current loss
+            elif prev_outcome == 0 and curr_outcome == 0:
+                outcome_data["loss_loss"].append(session_result['plotting_data'][i])
+    
+    if total_sessions == 0:
+        print(f"No valid sessions found for {subject_id}")
+        return None
+        
+    # Calculate averages and SEMs for each condition
+    for condition in outcome_data:
+        if outcome_data[condition]:
+            outcome_data[condition] = np.array(outcome_data[condition])
+    
+    # Plot selected conditions
+    plt.figure(figsize=(12, 7))
+    
+    # Colors for different conditions
+    colors = {
+        "win_win": '#117733', 
+        "win_loss": '#DDCC77',
+        "loss_win": '#4477AA',
+        "loss_loss": '#CC6677'
+    }
+    
+    # Labels for different conditions
+    labels = {
+        "win_win": "Win → Win", 
+        "win_loss": "Win → Loss",
+        "loss_win": "Loss → Win",
+        "loss_loss": "Loss → Loss"
+    }
+    
+    # Plot each selected condition
+    for condition in selected_conditions:
+        if condition in outcome_data and len(outcome_data[condition]) > 0:
+            condition_avg = np.mean(outcome_data[condition], axis=0)
+            condition_sem = calculate_sem(outcome_data[condition], axis=0)
+            
+            plt.fill_between(time_axis, 
+                           condition_avg - condition_sem,  
+                           condition_avg + condition_sem,  
+                           color=colors[condition], alpha=0.3)
+            
+            plt.plot(time_axis, condition_avg,
+                   color=colors[condition], linewidth=2.5,
+                   label=f'{labels[condition]}')
+    
+    # Add vertical line at cue onset
+    plt.axvline(x=0, color='black', linestyle='--', linewidth=1.5)
+    plt.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+    
+    # Labels and title
+    plt.xlabel('Time (s) after first lick', fontsize=24)
+    plt.ylabel('z-ΔF/F', fontsize=24)
+    plt.xticks(fontsize=20)
+    plt.yticks(fontsize=20)
+    plt.title(f'Previous and Current Outcome Effects: {subject_id}', fontsize=26)
+    plt.xlim([-pre_cue_time, post_cue_time])
+    plt.legend(loc='upper right', fontsize=24)
+    plt.tight_layout()
+    
+    # Save the figure
+    condition_label = '_'.join(selected_conditions) if len(selected_conditions) <= 2 else 'selected'
+    save_figure(plt.gcf(), subject_id, "pooled", f"previous_outcome_effect_{condition_label}")
+    
+    plt.show()
+    
+    # Return the data
+    return {
+        'subject_id': subject_id,
+        'total_sessions': total_sessions,
+        'selected_conditions': selected_conditions,
+        'outcome_data': outcome_data,
+        'time_axis': time_axis
+    }
 
 def analyze_win_stay_lose_stay(subject_id, session_date=None, behavior_df=None):
     """
@@ -4573,7 +4939,7 @@ def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False, beh
     # Process each session
     for session_date in sessions:
         # Process the session
-        session_result = process_session(subject_id, session_date, behavior_df=behavior_df)
+        session_result = process_session(subject_id, session_date, behavior_df=behavior_df, z_score=False)
         if not session_result:
             print(f"Could not process session {subject_id}/{session_date}")
             continue
@@ -4656,7 +5022,9 @@ def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False, beh
     if not session_differences:
         print(f"No valid sessions found for {subject_id}")
         return None
-
+    chronological_indices = list(range(len(session_dates)))
+    chronological_order = {date: idx+1 for idx, date in enumerate(session_dates)}
+    
     # Sort sessions based on confidence or chronologically
     if comp_conf and session_confidences:
         # Filter out sessions without confidence values
@@ -4667,7 +5035,7 @@ def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False, beh
         
         if not valid_sessions:
             print("No sessions with valid confidence values found, using chronological sorting")
-            sorted_indices = list(range(len(session_dates)))
+            sorted_indices = chronological_indices
         else:
             # Create mapping from session date to index
             date_to_idx = {date: idx for idx, date in enumerate(session_dates)}
@@ -4681,10 +5049,11 @@ def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False, beh
             # Print the confidence ranking
             print("\nSessions ranked by computer confidence (highest to lowest):")
             for i, sess in enumerate(sorted_session_dates):
-                print(f"{i+1}. Session {sess}: {session_confidences[sess]:.4f}")
+                # Use chronological order (original session number) in the printout
+                print(f"{i+1}. Session {chronological_order[sess]} (date: {sess}): {session_confidences[sess]:.4f}")
     else:
         # Use chronological sorting (default)
-        sorted_indices = list(range(len(session_dates)))
+        sorted_indices = chronological_indices
 
     # Reorder arrays based on sorted indices
     session_differences = [session_differences[i] for i in sorted_indices]
@@ -4694,7 +5063,7 @@ def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False, beh
     # Convert to array for heatmap
     win_loss_array = np.array(session_differences)
 
-    # Create figure for heatmap and peak differences plot
+    # Create figure for heatmap
     fig = plt.figure(figsize=(18, 10))
     gs = plt.GridSpec(2, 1, height_ratios=[2, 1])
 
@@ -4705,27 +5074,58 @@ def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False, beh
     win_loss_array = np.flipud(win_loss_array)
     flipped_session_dates = session_dates[::-1]  # Reverse the session dates for y-axis labels
 
-    # Find the maximum absolute value for symmetric color scaling
-    max_abs_val = np.max(np.abs(win_loss_array))
-    
-    # Create the heatmap with symmetric color scaling around zero
-    im = ax_heatmap.imshow(win_loss_array,
-                           aspect='auto',
-                           extent=[time_axis[0], time_axis[-1], 0, len(session_differences)],
-                           origin='lower',
-                           cmap='RdBu_r',
-                           interpolation='nearest',
-                           vmin=-max_abs_val,   # Set minimum value to negative of maximum
-                           vmax=max_abs_val)    # Set maximum value to maximum
+    # Special coloring for JOA-M-0020
+    if subject_id == "JOA-M-0020":
+        # Find the minimum value (should be slightly below 0)
+        min_val = np.min(win_loss_array)
+        max_val = np.max(win_loss_array)
+        
+        # Create a custom white-to-red colormap with better differentiation
+        from matplotlib.colors import LinearSegmentedColormap
+        
+        # Define a custom colormap with more distinct reds
+        colors = [(1, 1, 1),          # White
+                (1, 0.8, 0.8),      # Very light red
+                (1, 0.6, 0.6),      # Light red
+                (1, 0.3, 0.3),      # Medium red
+                (0.8, 0, 0),        # Dark red
+                (0.5, 0, 0)]        # Very dark red/maroon
+        
+        cmap_name = 'WhiteToRedEnhanced'
+        custom_cmap = LinearSegmentedColormap.from_list(cmap_name, colors, N=256)
+        
+        # Create the heatmap with the custom white-to-red gradient
+        # White for minimum/zero values, dark red for maximum positive values
+        im = ax_heatmap.imshow(win_loss_array,
+                            aspect='auto',
+                            extent=[time_axis[0], time_axis[-1], 0, len(session_differences)],
+                            origin='lower',
+                            cmap=custom_cmap,  # Custom white-to-red gradient
+                            interpolation='nearest',
+                            vmin=min_val,      # Set minimum value as white
+                        vmax=max_val)  
+    else:
+        # Regular symmetric color scaling around zero for other subjects
+        max_abs_val = np.max(np.abs(win_loss_array))
+        
+        im = ax_heatmap.imshow(win_loss_array,
+                            aspect='auto',
+                            extent=[time_axis[0], time_axis[-1], 0, len(session_differences)],
+                            origin='lower',
+                            cmap='RdBu_r',
+                            interpolation='nearest',
+                            vmin=-max_abs_val,
+                            vmax=max_abs_val)
 
     # Add vertical line at cue onset
     ax_heatmap.axvline(x=0, color='black', linestyle='--', linewidth=1.5)
 
     # Labels and formatting
-    sort_type = "Computer Confidence" if comp_conf else "Chronological (oldest first)"
-    ax_heatmap.set_xlabel('Time (s)', fontsize=16)
-    ax_heatmap.set_ylabel('Session', fontsize=16)
-    ax_heatmap.set_title(f'Win-Loss Signal Difference Across Sessions: {subject_id} (sorted by {sort_type})', fontsize=20)
+    sort_type = "Computer Confidence" if comp_conf else "Chronological"
+    ax_heatmap.set_xlabel('Time (s) from first lick', fontsize=24)
+    ax_heatmap.set_ylabel('Session', fontsize=24)
+    ax_heatmap.set_title(f'Win-Loss Signal Difference Across Sessions: {subject_id} ({sort_type})', fontsize=26)
+    ax_heatmap.tick_params(axis='both', which='major', labelsize=20)
 
     # Add specific y-tick labels at regular intervals
     tick_step = max(1, len(session_dates) // 10)  # Show at most 10 session labels
@@ -4734,17 +5134,19 @@ def analyze_session_win_loss_difference_heatmap(subject_id, comp_conf=False, beh
     # Create labels for every tick_step interval
     y_label_with_num = []
     for i in range(0, len(flipped_session_dates), tick_step):
-        if comp_conf and flipped_session_dates[i] in session_confidences:
-            y_label_with_num.append(f"{i+1}: {flipped_session_dates[i]} (conf: {session_confidences[flipped_session_dates[i]]:.2f})")
-        else:
-            y_label_with_num.append(f"{i+1}: {flipped_session_dates[i]}")
+        session_date = flipped_session_dates[i]
+        chrono_num = chronological_order[session_date]  # Original chronological number
+        y_label_with_num.append(f"{chrono_num}")
 
     ax_heatmap.set_yticks(y_ticks)
     ax_heatmap.set_yticklabels(y_label_with_num)
 
     # Add colorbar
     cbar = plt.colorbar(im, ax=ax_heatmap)
-    cbar.set_label('Win-Loss ΔF/F Difference', fontsize=10)
+    if subject_id == "JOA-M-0020":
+        cbar.set_label('Win-Loss ΔF/F Difference', fontsize=24)
+    else:
+        cbar.set_label('Win-Loss ΔF/F Difference', fontsize=24)
 
     # Save figure
     sort_suffix = "by_comp_conf" if comp_conf else "chronological"
